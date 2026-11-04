@@ -15,9 +15,11 @@ Circadian Pro automatically adjusts the brightness and color temperature of your
 
 It supports multiple independent instances, manual-control detection, automatic sleep mode, calibrated RGB/RGBW/RGB+CCT lighting and several brightness-transition profiles.
 
-**Current stable version:** `0.21.31`
+**Current stable version:** `0.21.32`
 
-Version 0.21.31 completes the English and Spanish interface, including help, actions, switches and validation messages, and refreshes panel translations when your interface language changes. See the [release notes](docs/release-0.21.31.md). The [full audit report](docs/auditoria-2026-10-13.md) records the earlier code review and its validation limits.
+**Available in the HACS default catalog.** Search for **Circadian Pro** to install it. Version 0.21.32 updates the installation and upgrade guide following [catalog approval](https://github.com/hacs/default/pull/11948); lighting behavior and the complete English/Spanish interface are unchanged from 0.21.31. See the [release notes](docs/release-0.21.32.md).
+
+[Installation](#installation) · [Instalación en español](#instalación-en-español) · [Updating](#updating) · [Screenshots](#screenshots)
 
 ## Screenshots
 
@@ -66,34 +68,51 @@ Native switch names are translated using Home Assistant's **server language**, a
 
 ## Installation
 
-### HACS
+### Requirements
 
-Requires Home Assistant **2026.10.0 or newer** and an installed, configured [HACS](https://www.hacs.xyz/docs/use/).
+- Home Assistant **2026.10.0 or newer**.
+- An **administrator account** to set up the integration and use its sidebar panel.
+- Lights already configured and working in Home Assistant. The available color controls depend on each light's capabilities.
+- Home Assistant's location and time zone set correctly for sunrise and sunset calculations.
+
+### Install from the HACS catalog — recommended
+
+1. Open **HACS**, search for **Circadian Pro**, and open its page.
+2. Select **Download** and choose the latest stable release.
+3. Restart Home Assistant.
+4. Complete the one-time setup below.
+
+If your Home Assistant version uses standalone HACS and it is not installed, follow its [official setup guide](https://www.hacs.xyz/docs/use/) first. Circadian Pro is already in its default catalog; adding a custom repository is optional.
+
+**Using the built-in Marketplace?** HACS documents this installation route for Home Assistant 2026.11 and newer. Search for **Circadian Pro** in **Settings → Marketplace**, following the [official Marketplace guide](https://www.hacs.xyz/docs/marketplace/). Continue with the setup below if it has not already opened. A first installation through Marketplace can open setup without a restart; follow any restart prompt shown by Home Assistant. The HACS steps above apply to the standalone HACS interface.
+
+### Activate the panel and create your first profile
+
+1. Open **Settings → Devices & services → Add integration**.
+2. Search for **Circadian Pro** and select it once. This activates the panel; it does not ask you to configure lights yet.
+3. Open **Circadian Pro** in the sidebar and choose **Create first profile**.
+4. Name the profile, select its lights, and follow the settings and calibration steps. White-channel settings appear automatically for compatible RGBW or RGB+CCT lights.
+5. Choose **Finish** to save the settings. **Preview light** is optional and changes the selected lights only while preview is active.
+
+The sidebar panel is added automatically for administrator users. No YAML, dashboard card or manual sidebar link is needed. Downloading the files through HACS alone does not complete this one-time setup.
+
+Use **New profile** in the panel to add more profiles. Each profile has its own settings button, lights and calibration. Changes refresh automatically, and profiles can be sorted by name or recent modification. See [calibration and controls](#rgbw-and-rgbcct-calibration) for details.
+
+### Cannot find it? Custom repository fallback
+
+Catalog changes can take up to eight hours to reach HACS, according to its [inclusion notice](https://github.com/hacs/default/pull/11948#issuecomment-6624872063). If Circadian Pro is still absent from your standalone HACS search:
 
 1. Open **HACS → ⋮ → Custom repositories**.
-2. Add `https://github.com/K320X/Circadian-Pro` with type **Integration**.
-3. Open **Circadian Pro** in HACS and download the latest stable release.
-4. Restart Home Assistant.
-5. Open **Settings → Devices & services → Add integration**, search for **Circadian Pro** and select it once.
-6. Open **Circadian Pro** in the sidebar and choose **Create first profile**.
+2. Enter `https://github.com/K320X/Circadian-Pro`, select **Integration**, and choose **Add**.
+3. Search for Circadian Pro again, download it, restart Home Assistant and complete the one-time setup above.
 
-The sidebar panel is added automatically for administrator users after that one-time integration setup. No YAML, dashboard card or manual sidebar link is needed. HACS downloading the files alone does not activate a new integration.
+This installs the same project and releases. See the [official custom-repository instructions](https://www.hacs.xyz/docs/faq/custom_repositories/). Marketplace has its own repository-link installation flow, described in the [Marketplace guide](https://www.hacs.xyz/docs/marketplace/).
 
-HACS custom-repository installation works independently of inclusion in its default catalog. Until a catalog submission is accepted, add the repository by URL using the steps above. See [HACS's custom-repository instructions](https://www.hacs.xyz/docs/faq/custom_repositories/).
+### Manual installation — alternative without HACS
 
-**En español:** abre **HACS → ⋮ → Repositorios personalizados**, pega el enlace anterior y selecciona **Integración**. Descarga Circadian Pro y reinicia Home Assistant. Después, en **Ajustes → Dispositivos y servicios → Añadir integración**, selecciona Circadian Pro una vez. Su panel aparece en la barra lateral; crea y calibra los perfiles desde allí.
-
-### Manual installation
-
-1. Download `circadian_pro.zip` from the [latest release](https://github.com/K320X/Circadian-Pro/releases/latest).
-2. Extract the ZIP file.
-3. Copy the resulting `circadian_pro` folder into:
-
-```text
-/config/custom_components/
-```
-
-The final structure must be:
+1. Download the **`circadian_pro.zip` asset** from the [latest release](https://github.com/K320X/Circadian-Pro/releases/latest).
+2. Extract it and copy the resulting `circadian_pro` folder into `/config/custom_components/`, creating `custom_components` if necessary.
+3. Check that `manifest.json` is directly inside `/config/custom_components/circadian_pro/`, without an extra nested `circadian_pro` folder:
 
 ```text
 /config/custom_components/circadian_pro/
@@ -104,44 +123,58 @@ The final structure must be:
 └── ...
 ```
 
-4. Restart Home Assistant.
-5. Open:
+4. Restart Home Assistant and follow [Activate the panel and create your first profile](#activate-the-panel-and-create-your-first-profile).
 
-```text
-Settings → Devices & services → Add integration
-```
+### Instalación en español
 
-6. Search for **Circadian Pro**. On a fresh installation, selecting it activates the panel without asking for a profile name or lights.
-7. Open **Circadian Pro** in the sidebar and choose **Create first profile**. Select and calibrate its lights there.
+Necesitas **Home Assistant 2026.10.0 o posterior**, una cuenta de administrador y luces que ya funcionen en Home Assistant. Comprueba también la ubicación y la zona horaria: se utilizan para calcular el amanecer y el atardecer.
 
-Once the integration loads, it automatically adds the **Circadian Pro** sidebar panel for administrator users. No manual dashboard or sidebar configuration is required. The panel lets you create, configure and calibrate profiles, and remains available across restarts even with no lighting profiles.
+**Instalación recomendada desde el catálogo:**
 
-Home Assistant still requires that one-time **Add integration** step to load a newly downloaded integration. Copying or downloading the files alone does not activate it. In Devices & services, the **Circadian Pro** entry keeps the panel available; it creates no lights or switches. Existing installations acquire this entry automatically while keeping their profile settings, entity identifiers and switch states.
+1. Abre **HACS**, busca **Circadian Pro** y entra en su ficha.
+2. Pulsa **Descargar**, selecciona la última versión estable y reinicia Home Assistant.
+3. Ve a **Configuración → Dispositivos y servicios → Añadir integración**, busca **Circadian Pro** y selecciónalo una vez.
+4. Abre **Circadian Pro** en la barra lateral y pulsa **Crear primer perfil**.
+5. Ponle un nombre, selecciona las luces y completa los ajustes y la calibración. Pulsa **Terminar** para guardar. **Previsualizar luz** es opcional y permite ver los ajustes en las luces mientras está activado.
 
-The panel lists every loaded profile in its own row, with a settings button on the right and **New profile** centered below the table. Sort by recent modification (default), name A–Z or name Z–A. Profile changes refresh automatically. Recent ordering uses Home Assistant's stored configuration-entry dates, with creation date as a fallback; it does not track ordinary light-state changes.
+Si tu versión de Home Assistant usa HACS independiente y aún no lo tienes instalado, sigue su [guía oficial de instalación](https://www.hacs.xyz/docs/use/). Si tu versión dispone del **Marketplace integrado** —la vía documentada para Home Assistant 2026.11 y posteriores—, busca Circadian Pro en **Configuración → Marketplace** y sigue la [guía oficial](https://www.hacs.xyz/docs/marketplace/). Después completa la configuración inicial si no se ha abierto automáticamente y reinicia cuando Home Assistant lo indique.
+
+El panel lateral aparece automáticamente para administradores después de añadir la integración. No necesitas YAML ni crear un enlace manual. Los siguientes perfiles se añaden desde **Nuevo perfil** en el propio panel.
+
+**Si no aparece en HACS:** la incorporación al catálogo puede tardar hasta ocho horas en propagarse. Como alternativa, abre **HACS → ⋮ → Repositorios personalizados**, añade `https://github.com/K320X/Circadian-Pro` con tipo **Integración**, y continúa desde el paso de descarga. Es el mismo proyecto y recibe las mismas versiones.
+
+**Instalación manual:** descarga el archivo `circadian_pro.zip` de la [última publicación](https://github.com/K320X/Circadian-Pro/releases/latest), descomprímelo y copia su carpeta `circadian_pro` en `/config/custom_components/`. Reinicia Home Assistant y continúa desde **Añadir integración**. La ruta final del manifiesto debe ser `/config/custom_components/circadian_pro/manifest.json`.
 
 ## Updating
 
-### Installed through HACS
+### Installed through HACS or Marketplace
 
-Publishers release updates on GitHub; HACS checks for new releases and exposes available updates in Home Assistant. Open the Circadian Pro update in HACS/Home Assistant, review the release notes, back up your installation, install it and restart Home Assistant. Profiles and calibrations remain in Home Assistant's configuration.
+New stable releases are published on [GitHub](https://github.com/K320X/Circadian-Pro/releases). HACS or Marketplace checks for releases and makes available updates visible in Home Assistant.
 
-Circadian Pro does not download or install its own updates. HACS replaces the integration files; it does not create a history of version folders. Home Assistant backups are managed separately.
+1. Open the Circadian Pro update in HACS, Marketplace or Home Assistant's update list.
+2. Read the release notes and create a Home Assistant backup before installing.
+3. Install the update and restart Home Assistant when prompted so the new integration code loads.
+4. Open the Circadian Pro panel and check your existing profiles. You do not need to add the integration again.
 
-For an existing manual installation, back up first, add the same repository in HACS and download the release. Do not remove the integration entries or profiles. HACS will manage the same `custom_components/circadian_pro` directory after installation.
+Profiles and calibrations are stored in Home Assistant's configuration. Updating the integration is intended to preserve them, together with entity identifiers and switch states. Circadian Pro does not download or install its own updates. Updates replace the component files; Home Assistant backups are managed separately.
+
+**Already installed through a custom repository?** Keep using the existing installation. Catalog inclusion does not require reinstalling Circadian Pro or recreating its integration entries or profiles.
+
+**Moving from a manual installation to HACS?** Back up first, find Circadian Pro in the catalog and download it. Keep your existing integration entries and profiles. HACS manages the same `custom_components/circadian_pro` directory after installation; use the custom-repository fallback only if the catalog search does not find it.
 
 ### Installed manually
 
-1. Download the ZIP from the new release.
-2. Replace the existing folder:
+1. Create a Home Assistant backup and download `circadian_pro.zip` from the new release.
+2. Replace `/config/custom_components/circadian_pro/` with the extracted `circadian_pro` folder. Keep the existing integration entries and profiles in Home Assistant.
+3. Restart Home Assistant and check your profiles in the sidebar panel.
 
-```text
-/config/custom_components/circadian_pro/
-```
+**En español:** abre la actualización de Circadian Pro en HACS, Marketplace o la lista de actualizaciones de Home Assistant. Lee las notas, crea una copia de seguridad, instala y reinicia cuando se indique. No vuelvas a añadir la integración ni borres perfiles: se reutiliza la configuración existente. Si ya lo instalaste mediante un repositorio personalizado, puedes seguir utilizándolo; entrar en el catálogo no requiere reinstalar. Para actualizar manualmente, sustituye la carpeta del componente por la del nuevo ZIP y reinicia, conservando las entradas de integración.
 
-3. Restart Home Assistant.
+### Panel missing or showing an older version?
 
-Creating a backup before updating is recommended.
+- **No sidebar entry:** sign in as an administrator and check that Circadian Pro has been added under **Settings → Devices & services**. Downloading the files alone is not enough with standalone HACS.
+- **A separate Circadian Pro entry appears alongside your profiles:** this entry keeps the sidebar panel available, even when there are no lighting profiles. It does not create lights or switches and should be kept.
+- **Old interface after an update:** complete the required restart, then reload the frontend as described below.
 
 Each panel script and its custom element now have identities based on the script's contents, so Home Assistant can load the updated interface without reusing an older panel implementation. If a view still shows the old interface after updating, reload the Home Assistant frontend. In the iOS Companion app, a persistent old view can be refreshed from **Settings → Companion App → Debugging → Clear web view cache** (called **Reset frontend cache** in older versions), followed by closing and reopening the app.
 
@@ -263,7 +296,9 @@ Licensing and provenance for inherited code are recorded in [NOTICE](custom_comp
 
 ## Development checks
 
-Use Python 3.12 or newer and Node.js 24. The checks do not require a Home Assistant installation:
+The [earlier audit report](docs/auditoria-2026-10-13.md) records that review's findings and validation limits.
+
+Use Python 3.12 or newer and Node.js 24.22.1 (the version pinned in CI). The checks do not require a Home Assistant installation:
 
 ```sh
 python -m pip install -r requirements-dev.txt

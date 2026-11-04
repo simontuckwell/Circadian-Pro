@@ -19,7 +19,9 @@ HACS uses `hacs.json` and downloads `custom_components/circadian_pro` from the p
 
 Do not enable `zip_release` against the manual `circadian_pro.zip`: that ZIP includes a `circadian_pro/` wrapper, while HACS ZIP extraction expects files at the integration root. Keep the manual ZIP and tagged component byte-identical, including `brand/`, license and notice files.
 
-A new release is how HACS discovers an update; no separate HACS upload is needed. Default-catalog inclusion requires a reviewed submission to `hacs/default` and is independent of installation by custom repository URL.
+A new release is how HACS discovers an update; no separate HACS upload is needed. Circadian Pro was accepted into the default catalog on 2026-11-04 in [hacs/default#11948](https://github.com/hacs/default/pull/11948). Keep catalog search first in the installation guide and custom-repository installation as a fallback. Future releases use the same repository and do not require a new catalog submission. Check current official HACS/Marketplace instructions when changing the user-facing installation guide.
+
+For a documentation-only release, record that scope explicitly. If a new version is published, the component may differ only in its manifest version; compare all other packaged files with the previous release and do not claim a new live installation or compatibility check. Updating the README does not itself require restarting or reinstalling Home Assistant. Follow the backup and live-verification steps above when a Home Assistant deployment is actually included in the authorized task.
 
 For rollback, restore the preserved component and restart Home Assistant Core. Use the native backup if configuration also requires recovery; do not overwrite `.storage` files while Home Assistant is running.
 
