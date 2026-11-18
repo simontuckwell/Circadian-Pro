@@ -3071,7 +3071,7 @@ class CircadianProManager:
         self.manual_control[light] = attributes
         if not previous.has_any() and attributes.has_any() and not getattr(self, "_disabled", False):
             state = self.hass.states.get(light)
-            light_name = state.name if state is not None else light
+            light_name = getattr(state, "name", light)
             parts = []
             if LightControlAttributes.BRIGHTNESS in attributes:
                 parts.append("brightness")
@@ -3210,7 +3210,7 @@ class CircadianProManager:
                 previous = self.get_manual_control_attributes(light)
                 if previous.has_any() and not getattr(self, "_disabled", False):
                     state = self.hass.states.get(light)
-                    light_name = state.name if state is not None else light
+                    light_name = getattr(state, "name", light)
                     explanations = {
                         "light_off": "light switched off",
                         "profile_paused": "profile paused",
