@@ -62,6 +62,52 @@ class GroupExpansionTests(unittest.TestCase):
 
 
 class AdaptationSafetyTests(unittest.TestCase):
+    def test_redundant_initial_target_still_detects_first_hue_app_override(self):
+        """An already-correct Hue room must not need a second manual adjustment."""
+        h = ProtocolHarness(modes=("color_temp",))
+        h.switch._skip_redundant_commands = True
+        # The initial brightness and CT already equal CP's requested targets.
+        payload = h.dispatch(3500)
+        self.assertIsNone(payload)
+        self.assertEqual(h.calls, [])
+        self.assertEqual(h.manager.last_service_data[h.light]["brightness"], 255)
+        self.assertEqual(h.manager.last_service_data[h.light]["color_temp_kelvin"], 3500)
+
+        # Change the room via Hue, not a HA light.turn_on service call.
+        h.state.attributes["brightness"] = 95
+        changed = complete_immediate(h.ns["significant_change"](
+            h.manager, h.switch, h.light, SimpleNamespace(id="poll"),
+        ))
+        self.assertIn(h.ns["LightControlAttributes"].BRIGHTNESS, changed)
+        complete_immediate(h.ns["update_manually_controlled_from_untracked_change"](
+            h.manager, h.switch, h.light, False, SimpleNamespace(id="poll"),
+        ))
+        self.assertTrue(h.manager.manual_control[h.light].has_any())
+        self.assertTrue(h.events)
+
+    def test_partial_redundant_target_retains_unsent_brightness_baseline(self):
+        h = ProtocolHarness(modes=("color_temp",))
+        h.switch._skip_redundant_commands = True
+        # A needed colour command is sent, but the brightness command is omitted.
+        h.dispatch(4000)
+        self.assertEqual(len(h.calls), 1)
+        self.assertEqual(h.manager.last_service_data[h.light]["brightness"], 255)
+        self.assertEqual(h.manager.last_service_data[h.light]["color_temp_kelvin"], 4000)
+        h.state.attributes["brightness"] = 100
+        changed = complete_immediate(h.ns["significant_change"](
+            h.manager, h.switch, h.light, SimpleNamespace(id="poll"),
+        ))
+        self.assertIn(h.ns["LightControlAttributes"].BRIGHTNESS, changed)
+
+    def test_nonredundant_targets_are_not_assumed_to_have_been_applied(self):
+        h = ProtocolHarness(modes=("color_temp",))
+        h.switch._skip_redundant_commands = True
+        h.dispatch(4000)
+        # A colour command was sent and its expected value is known; the
+        # unsent baseline is seeded only from attributes matching HA state.
+        self.assertEqual(h.manager.last_service_data[h.light]["brightness"], 255)
+        self.assertEqual(h.manager.last_service_data[h.light]["color_temp_kelvin"], 4000)
+
     def test_split_commands_keep_brightness_for_external_change_detection(self):
         h = ProtocolHarness()
         h.switch._separate_turn_on_commands = True
