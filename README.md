@@ -62,6 +62,7 @@ Native switch names are translated using Home Assistant's **server language**, a
 - Fixed or limited sunrise and sunset times.
 - Manual-control detection with optional automatic reset.
 - **Activity logging (experimental):** record when a room enters or leaves manual control, including the reason when known, plus deliberate profile pause/resume and Sleep mode changes. Entries are associated with the profile's main switch in Home Assistant Activity. Routine adaptation intervals are deliberately omitted. The existing `circadian_pro.manual_control` event remains available for automations.
+- **Hue group colour-mode normalisation:** Hue rooms that only expose native XY can report CP's requested RGB colours back as XY. Near-identical RGB-to-XY round trips are not treated as manual overrides; noticeably different colours and other colour-mode changes still trigger manual control.
 - RGB, RGBW, RGB+CCT (`rgbww`) and color-temperature light support.
 - Custom RGBW and RGB+CCT calibration at 4000 K and 1000 K.
 - Configurable adaptation intervals and transitions.
