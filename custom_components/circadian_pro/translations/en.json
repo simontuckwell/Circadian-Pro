@@ -122,7 +122,7 @@
           "brightness_mode_time_light_minutes": "Extends the increase after sunrise.\nStarts the decrease earlier, before sunset.\nAffects brightness and, when checked, color temperature too.",
           "sleep_activation_mode": "Disabled: sleep mode is activated only by its manual switch.\nBy sunrise and sunset: active between the profile sunset and sunrise.\nBy schedule: active during the schedule below.\nThe manual switch can activate sleep mode at any time.",
           "autoreset_control_seconds": "Time before Circadian Pro resumes control after a manual change. Use 0 to disable automatic resumption.",
-          "brightness_mode": "Natural: keeps maximum brightness during the day; at night, brightness falls and rises again towards sunrise. It does not apply to color temperature, which follows its independent solar curve. It ignores the two transition times.\nLinear: changes brightness at a constant rate. Each transition lasts the sum of the two times.\nSigmoid: uses an S curve, gentle at the ends and faster in the middle. The two times set the main part of the transition.\nIn Linear and Sigmoid, color temperature also follows its solar curve unless you check “Also apply to color temperature”.\nIn Linear and Sigmoid, each time accepts whole minutes from 0 to 240.",
+          "brightness_mode": "Natural: keeps maximum brightness during the day; at night, brightness falls and rises again towards sunrise. It does not apply to color temperature, which follows its independent solar curve. It ignores the two transition times.\nSolar Elevation: follows the actual Sun height, rising towards solar noon and falling towards sunset. The curve is bounded by the configured minimum and maximum brightness; it ignores sunrise/sunset time overrides and brightness transition windows. Color temperature remains independent.\nLinear: changes brightness at a constant rate. Each transition lasts the sum of the two times.\nSigmoid: uses an S curve, gentle at the ends and faster in the middle. The two times set the main part of the transition.\nIn Linear and Sigmoid, color temperature also follows its solar curve unless you check “Also apply to color temperature”.\nIn Linear and Sigmoid, each time accepts whole minutes from 0 to 240.",
           "apply_temperature_curve": "Shares the curve and timing between brightness and color temperature, each within its own limits. This also replaces the nighttime color temperature progression. Sleep mode keeps its own settings.",
           "detect_non_ha_changes": "Detect changes made directly on a light or through another system. Requires “Pause adaptation after manual changes”. Requests a light state update at every adaptation interval; disable this if the light reports unreliable states.",
           "only_once": "Adapt lights when they turn on, then leave their settings unchanged. When disabled, adaptation continues while the lights are on.",
@@ -239,7 +239,8 @@
       "options": {
         "default": "Natural",
         "linear": "Linear",
-        "tanh": "Sigmoid"
+        "tanh": "Sigmoid",
+        "solar_elevation": "Solar Elevation"
       }
     },
     "manual_control": {
@@ -328,7 +329,7 @@
       "fields": {
         "brightness_mode": {
           "name": "Brightness / color temperature mode",
-          "description": "Choose the brightness curve: Natural follows the solar cycle; Linear changes at a constant rate; Sigmoid uses an S curve with gentler ends. In Linear and Sigmoid, the curve can also control color temperature when “Also apply to color temperature” is enabled. This action uses seconds for the transition times."
+          "description": "Choose the brightness curve: Natural is flat during daylight; Solar Elevation follows the Sun's actual height to solar noon; Linear changes at a constant rate; Sigmoid uses an S curve with gentler ends. In Linear and Sigmoid, the curve can also control color temperature when “Also apply to color temperature” is enabled. This action uses seconds for the transition times."
         },
         "apply_temperature_curve": {
           "name": "Also apply to color temperature",
