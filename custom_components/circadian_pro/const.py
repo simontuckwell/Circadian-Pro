@@ -303,7 +303,8 @@ DOCS[CONF_MAX_SUNSET_TIME] = (
 
 CONF_BRIGHTNESS_MODE, DEFAULT_BRIGHTNESS_MODE = "brightness_mode", "default"
 DOCS[CONF_BRIGHTNESS_MODE] = (
-    "Brightness mode to use. Possible values are default, linear, and tanh "
+    "Brightness mode: default (Natural), linear, tanh (Sigmoid), or "
+    "solar_elevation (real sun height, normalised to solar noon). "
     "(uses brightness_mode_time_dark and brightness_mode_time_light). "
     "Linear and tanh can also control color temperature with apply_temperature_curve. "
 )
@@ -623,7 +624,7 @@ VALIDATION_TUPLES: list[tuple[str, Any, Any]] = [
         DEFAULT_BRIGHTNESS_MODE,
         selector.SelectSelector(  # type: ignore[arg-type]
             selector.SelectSelectorConfig(
-                options=["default", "linear", "tanh"],
+                options=["default", "linear", "tanh", "solar_elevation"],
                 translation_key=CONF_BRIGHTNESS_MODE,
                 multiple=False,
                 mode=selector.SelectSelectorMode.DROPDOWN,
