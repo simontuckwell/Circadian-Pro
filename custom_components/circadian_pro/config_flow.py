@@ -85,7 +85,7 @@ def options_from_form(
                 # Natural does not use these windows and hides their controls.
                 # Preserve inactive legacy values rather than creating an
                 # invisible validation error; active controls stay at 0–240.
-                if minutes < 0 or (options.get("brightness_mode") != "default" and minutes > 240):
+                if minutes < 0 or (options.get("brightness_mode") in ("linear", "tanh") and minutes > 240):
                     raise ValueError("Brightness windows must be between 0 and 240 minutes")
             seconds = int(minutes) * 60
             # Compare with the server's original values, never client-supplied
