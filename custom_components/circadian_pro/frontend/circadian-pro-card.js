@@ -4,7 +4,7 @@ const WIDTH = 360, LEFT = 19, RIGHT = 342, TOP = 12, BOTTOM = 79;
 const MODES = {solar_elevation:"Solar Elevation", default:"Natural", linear:"Linear", tanh:"Sigmoid"};
 const CSS = [
 ":host{display:block;color:var(--primary-text-color)}",
-"ha-card{overflow:hidden;border-radius:19px;box-shadow:var(--ha-card-box-shadow,0 2px 10px #0001)}",
+"ha-card{container-type:inline-size;overflow:hidden;border-radius:19px;box-shadow:var(--ha-card-box-shadow,0 2px 10px #0001)}",
 ".main{padding:20px 21px 16px}.head,.identity,.actions,.numbers,.bottom,.mode{display:flex;align-items:center}",
 ".head,.bottom{justify-content:space-between;gap:10px}.identity{gap:11px;min-width:0}",
 ".icon{display:grid;place-items:center;width:37px;height:37px;border-radius:12px;background:color-mix(in srgb,var(--primary-color,#2796bd) 10%,transparent);color:var(--primary-color,#2796bd);flex-shrink:0;transition:background .2s,color .2s,box-shadow .2s}",
@@ -29,13 +29,18 @@ const CSS = [
 ".swatch{height:21px;width:21px;flex-shrink:0;display:inline-block;border-radius:6px;border:1px solid #0002;box-shadow:0 1px 3px #0001}",
 ".curve{margin-top:16px}.curve-heading{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin:0 3px 5px}",
 ".curve-title{font-weight:620;font-size:12px}.curve-now{font-size:10px;color:var(--secondary-text-color);font-variant-numeric:tabular-nums}",
+".solar-times{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;margin:2px 0 0;color:var(--secondary-text-color);font-size:10px}",
+".solar-times span:nth-child(2){text-align:center}.solar-times span:nth-child(3){text-align:right}.solar-times b{font-weight:500}",
 "svg{width:100%;height:auto;display:block;overflow:visible}.axis-label{font-size:10px;fill:var(--secondary-text-color);font-family:inherit}",
 ".divider{border:0;height:1px;background:var(--divider-color,#8883);margin:11px 0 12px}",
 ".mode{gap:6px;font-size:11px;color:var(--secondary-text-color)}.mode ha-icon{--mdc-icon-size:18px}",
 ".resume{border:0;background:none;color:var(--primary-color,#259cbc);cursor:pointer;font:inherit;font-size:11px;font-weight:650;padding:4px}",
 ".resume:disabled{opacity:.4;cursor:wait}.note{font-size:11px;color:var(--secondary-text-color);line-height:1.5;padding:12px;text-align:center}",
 ".error{color:var(--error-color,#c53c3c);padding:7px 0 0;font-size:11px}",
-"@media(max-width:350px){.main{padding:16px 13px 12px}.name{font-size:15px}.metric{padding:10px}.metric-value{font-size:23px}.pill{padding:4px 7px}.actions{gap:5px}}",
+"@container (max-width:400px){.main{padding:17px 15px 15px}.head{flex-wrap:wrap;row-gap:8px}.identity{flex:1 1 168px}.name{font-size:16px;line-height:1.25;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}.actions{gap:6px;margin-left:auto}.pill{padding:4px 8px}.numbers{gap:9px;margin-top:12px}.metric{padding:11px 10px}.metric-value{font-size:clamp(19px,6cqi,24px);gap:5px;white-space:nowrap}.unit{font-size:12px;margin-left:-3px}.swatch{width:18px;height:18px}.curve{margin-top:12px}}",
+"@container (max-width:350px){.solar-times b{display:block}.solar-times{font-size:10px}}",
+"@container (max-width:315px){.identity{flex-basis:100%}.actions{width:100%;justify-content:flex-end}.numbers{gap:7px}.metric{padding:10px 8px}.metric-value{font-size:20px;gap:4px}.swatch{width:16px;height:16px}.unit{font-size:11px}}",
+"@container (max-width:270px){.numbers{flex-direction:column;align-items:stretch}.metric{flex:none}.metric-value{font-size:23px}}",
 "@media(prefers-reduced-motion:reduce){.toggle,.knob,.icon{transition:none}}"
 ].join("");
 
@@ -116,8 +121,10 @@ export class CircadianProCard extends HTMLElement {
   this._render();this._ensureCurve();
  }
  disconnectedCallback(){clearInterval(this._timer);this._timer=null;}
- getCardSize(){return 5;}
- getGridOptions(){return {columns:6,rows:6,min_rows:5};}
+ getCardSize(){return 8;}
+ // Avoid a fixed row count: HA Sections must allocate the card's actual
+ // height, especially on phones where header and labels may wrap.
+ getGridOptions(){return {columns:9,min_columns:6};}
  static getStubConfig(){return {entity:""};}
  static getConfigForm(){return {schema:[
   {name:"entity",required:true,selector:{entity:{domain:"switch",integration:"circadian_pro"}}},
@@ -164,19 +171,21 @@ export class CircadianProCard extends HTMLElement {
   if(!g)return '<div class="note">'+(curve?.mode && curve.mode!=="solar_elevation"?
    "Solar brightness graph available in Solar Elevation mode.":"Loading today’s solar curve…")+'</div>';
   const zone=curve.timezone;
-  const label=(time,name)=>Number.isFinite(time)?
-   '<line x1="'+g.x(time)+'" x2="'+g.x(time)+'" y1="9" y2="'+BOTTOM+'" stroke="var(--divider-color)" stroke-dasharray="2 4"/>'+
-   '<text x="'+g.x(time)+'" y="110" text-anchor="middle" class="axis-label">'+name+' '+clock(time,zone)+'</text>':"";
+  const label=time=>Number.isFinite(time)?
+   '<line x1="'+g.x(time)+'" x2="'+g.x(time)+'" y1="9" y2="'+BOTTOM+'" stroke="var(--divider-color)" stroke-dasharray="2 4"/>':"";
   const id=this._svgId||(this._svgId="cpc"+Math.random().toString(36).slice(2));
-  return '<svg viewBox="0 0 360 118" role="img" aria-label="Brightness solar curve from sunrise to sunset">'+
+  return '<svg viewBox="0 0 360 86" role="img" aria-label="Brightness solar curve from sunrise to sunset">'+
    '<defs><linearGradient id="'+id+'l"><stop offset="0%" stop-color="#db9952"/><stop offset="50%" stop-color="#f3d79e"/><stop offset="100%" stop-color="#db9952"/></linearGradient>'+
    '<linearGradient id="'+id+'a" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#efd18f" stop-opacity=".36"/><stop offset="100%" stop-color="#efd18f" stop-opacity=".03"/></linearGradient></defs>'+
    '<path d="'+g.path+' L'+RIGHT+' '+BOTTOM+' L'+LEFT+' '+BOTTOM+' Z" fill="url(#'+id+'a)"/>'+
    '<line x1="'+LEFT+'" x2="'+RIGHT+'" y1="'+BOTTOM+'" y2="'+BOTTOM+'" stroke="var(--divider-color)"/>'+
-   label(curve.sunrise?.timestamp,"Sunrise")+label(curve.solar_noon,"Noon")+label(curve.sunset?.timestamp,"Sunset")+
+   label(curve.sunrise?.timestamp)+label(curve.solar_noon)+label(curve.sunset?.timestamp)+
    '<path d="'+g.path+'" fill="none" stroke="url(#'+id+'l)" stroke-width="3.4" stroke-linejoin="round" stroke-linecap="round"/>'+
    '<line x1="'+g.nowX+'" x2="'+g.nowX+'" y1="6" y2="'+BOTTOM+'" stroke="var(--primary-text-color)" opacity=".23" stroke-dasharray="3 4"/>'+
-   '<circle cx="'+g.nowX+'" cy="'+g.nowY+'" r="6" fill="#e9ae48" stroke="var(--card-background-color,#fff)" stroke-width="2"/></svg>';
+   '<circle cx="'+g.nowX+'" cy="'+g.nowY+'" r="6" fill="#e9ae48" stroke="var(--card-background-color,#fff)" stroke-width="2"/></svg>'+
+   '<div class="solar-times"><span>Sunrise <b>'+clock(curve.sunrise?.timestamp,zone)+'</b></span>'+
+   '<span>Noon <b>'+clock(curve.solar_noon,zone)+'</b></span>'+
+   '<span>Sunset <b>'+clock(curve.sunset?.timestamp,zone)+'</b></span></div>';
  }
  _render(){
   if(!this._config || !this.shadowRoot)return;
