@@ -63,6 +63,32 @@ test("Hue group on/off state is independent of CP adaptation state", () => {
   assert.match(card.shadowRoot.innerHTML, /Paused/);
 });
 
+test("card layouts use width-aware styling and content-determined height", () => {
+  const card = new CircadianProCard();
+  assert.deepEqual(card.getGridOptions(), {columns: 9, min_columns: 6});
+  assert.ok(card.getCardSize() >= 7);
+  assert.match(source, /ha-card\\{container-type:inline-size/);
+  assert.match(source, /@container \\(max-width:315px\\)/);
+  assert.match(source, /@container \\(max-width:270px\\)/);
+  assert.match(source, /white-space:normal/);
+  assert.match(source, /\\.numbers\\{flex-direction:column/);
+});
+
+test("solar events are labelled in a responsive row, outside the SVG", () => {
+  const card = new CircadianProCard();
+  const svgAndLabels = card._chart({
+    day_start: 0, day_end: 86400, timezone: "Europe/London",
+    min_brightness: 10, max_brightness: 50, mode: "solar_elevation",
+    points, sunrise: {timestamp:21600}, solar_noon:43200,
+    sunset: {timestamp:64800},
+  }, 43200);
+  assert.match(svgAndLabels, /<svg viewBox="0 0 360 86"/);
+  assert.match(svgAndLabels, /<\\/svg><div class="solar-times">/);
+  assert.match(svgAndLabels, /Sunrise <b>[^<]+<\\/b>/);
+  assert.match(svgAndLabels, /Noon <b>[^<]+<\\/b>/);
+  assert.match(svgAndLabels, /Sunset <b>[^<]+<\\/b>/);
+});
+
 test("automatic, manual, paused and unavailable states are distinct", () => {
   assert.equal(profileStatus("on", { manual_control: [] }), "Automatic");
   assert.equal(profileStatus("on", { manual_control: ["light.study"] }), "Manual");
