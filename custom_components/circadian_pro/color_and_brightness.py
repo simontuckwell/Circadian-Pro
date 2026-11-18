@@ -109,6 +109,24 @@ class SunEvents:
         """
         return 1.0 if self.astral_location.solar_elevation(dt) > 0 else -1.0
 
+    def solar_elevation_progress(self, dt: datetime.datetime) -> float:
+        """Normalise real solar elevation against today's solar-noon elevation.
+
+        Match Circadian Lighting's daylight curve: use the -0.833 degree
+        apparent-sunrise reference and return zero whenever the sun is below
+        the geometric horizon. Unlike timed modes, this deliberately uses
+        astronomical position, not configured sunrise/sunset offsets.
+        """
+        elevation = self.astral_location.solar_elevation(dt)
+        if elevation <= 0:
+            return 0.0
+        noon = self.astral_location.noon(dt, local=False)
+        maximum = self.astral_location.solar_elevation(noon)
+        if maximum <= 0:
+            return 0.0
+        apparent_horizon = -0.833
+        return clamp((elevation - apparent_horizon) / (maximum - apparent_horizon), 0.0, 1.0)
+
     def sunrise(self, dt: datetime.date) -> datetime.datetime:
         """Return the (adjusted) sunrise time for the given datetime."""
         sunrise = (
@@ -290,7 +308,7 @@ class SunLightSettings:
     max_sunset_time: datetime.time | None
     brightness_mode_time_dark: datetime.timedelta
     brightness_mode_time_light: datetime.timedelta
-    brightness_mode: Literal["default", "linear", "tanh"] = "default"
+    brightness_mode: Literal["default", "linear", "tanh", "solar_elevation"] = "default"
     apply_temperature_curve: bool = False
     sunrise_offset: datetime.timedelta = datetime.timedelta()
     sunset_offset: datetime.timedelta = datetime.timedelta()
@@ -321,6 +339,11 @@ class SunLightSettings:
             return self.max_brightness
         delta_brightness = self.max_brightness - self.min_brightness
         return (delta_brightness * (1 + sun_position)) + self.min_brightness
+
+    def _brightness_pct_solar_elevation(self, dt: datetime.datetime) -> float:
+        """Scale the daylight solar-elevation curve to this profile's limits."""
+        progress = self.sun.solar_elevation_progress(dt)
+        return self.min_brightness + (self.max_brightness - self.min_brightness) * progress
 
     def _timed_curve_value(
         self,
@@ -386,9 +409,11 @@ class SunLightSettings:
         """Calculate the brightness in %."""
         if is_sleep:
             return self.sleep_brightness
-        assert self.brightness_mode in ("default", "linear", "tanh")
+        assert self.brightness_mode in ("default", "linear", "tanh", "solar_elevation")
         if self.brightness_mode == "default":
             return self._brightness_pct_default(dt, sun_position)
+        if self.brightness_mode == "solar_elevation":
+            return self._brightness_pct_solar_elevation(dt)
         if self.brightness_mode == "linear":
             return self._brightness_pct_linear(dt, events)
         if self.brightness_mode == "tanh":
@@ -438,6 +463,9 @@ class SunLightSettings:
             shared_progress = self._timed_curve_value(dt, self.brightness_mode, events)
         if shared_progress is not None:
             brightness_pct = self.min_brightness + (self.max_brightness - self.min_brightness) * shared_progress
+        elif self.brightness_mode == "solar_elevation" and not is_sleep:
+            # Real elevation also varies on polar days with no sunrise/sunset.
+            brightness_pct = self._brightness_pct_solar_elevation(dt)
         elif events is None and not is_sleep:
             # Linear/tanh have no sunrise/sunset window on uninterrupted days.
             brightness_pct = self.max_brightness if sun_position > 0 else self.min_brightness
