@@ -305,8 +305,8 @@ CONF_BRIGHTNESS_MODE, DEFAULT_BRIGHTNESS_MODE = "brightness_mode", "default"
 DOCS[CONF_BRIGHTNESS_MODE] = (
     "Brightness mode: default (Natural), linear, tanh (Sigmoid), or "
     "solar_elevation (real sun height, normalised to solar noon). "
-    "(uses brightness_mode_time_dark and brightness_mode_time_light). "
-    "Linear and tanh can also control color temperature with apply_temperature_curve. "
+    "Only linear and tanh use brightness transition windows or support "
+    "a shared color temperature curve. "
 )
 CONF_APPLY_TEMPERATURE_CURVE, DEFAULT_APPLY_TEMPERATURE_CURVE = "apply_temperature_curve", False
 DOCS[CONF_APPLY_TEMPERATURE_CURVE] = (
