@@ -104,4 +104,15 @@ async def websocket_card_curve(hass: Any, connection: Any, msg: dict[str, Any]) 
         sleep_entity if sleep_entity
         and connection.user.permissions.check_entity(sleep_entity, POLICY_READ) else None
     )
+    # Return the original light-group selection rather than expanded member
+    # lights. Native Hue rooms/zones stay a single entity, so the card can
+    # follow the *actual room* state instead of CP's adaptation switch state.
+    # Never expose a partial list of restricted lights: that could make the
+    # displayed room status misleading as well as reveal private entities.
+    configured_lights = list(getattr(switch, "_configured_lights", ()))
+    result["light_entity_ids"] = (
+        configured_lights
+        if all(connection.user.permissions.check_entity(light, POLICY_READ)
+               for light in configured_lights) else []
+    )
     connection.send_result(msg["id"], result)
