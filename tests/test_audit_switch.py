@@ -261,7 +261,7 @@ class ActivityLoggingTests(unittest.TestCase):
         self.ns["SWITCH_DOMAIN"] = "switch"
         load_functions(self.ns, "switch.py", {"log_activity"}, "CircadianProSwitch")
         load_functions(self.ns, "switch.py", {
-            "_log_activity_for_light", "get_manual_control_attributes",
+            "_notify_manual_state_change", "_log_activity_for_light", "get_manual_control_attributes",
             "set_manual_control_attributes", "add_manual_control_attributes", "reset",
         }, "CircadianProManager")
         self.events = []
@@ -278,6 +278,10 @@ class ActivityLoggingTests(unittest.TestCase):
             lights=["light.study"], is_on=True, hass=self.hass,
         )
         self.switch.log_activity = MethodType(self.ns["log_activity"], self.switch)
+        self.switch.activity_writes = 0
+        def write_profile_state():
+            self.switch.activity_writes += 1
+        self.switch.async_write_ha_state = write_profile_state
         self.manager = SimpleNamespace(
             _disabled=False, hass=self.hass, switches=[self.switch],
             manual_control={}, auto_reset_manual_control_times={},
@@ -287,7 +291,7 @@ class ActivityLoggingTests(unittest.TestCase):
             cancel_ongoing_adaptation_calls=lambda _: None,
             _handle_timer=lambda *args: None,
         )
-        for name in ("_log_activity_for_light", "get_manual_control_attributes",
+        for name in ("_notify_manual_state_change", "_log_activity_for_light", "get_manual_control_attributes",
                      "set_manual_control_attributes", "add_manual_control_attributes", "reset"):
             setattr(self.manager, name, MethodType(self.ns[name], self.manager))
         self.flags = self.ns["LightControlAttributes"]
@@ -309,6 +313,7 @@ class ActivityLoggingTests(unittest.TestCase):
         self.manager.reset("light.study", reason="light_off", context=self.context)
         self.manager.reset("light.study", reason="light_off", context=self.context)
         self.assertEqual(len(self.events), 2)
+        self.assertEqual(self.switch.activity_writes, 3)
         self.assertIn("light switched off", self.events[1][1]["message"])
         self.assertIs(self.events[1][2], self.context)
 
