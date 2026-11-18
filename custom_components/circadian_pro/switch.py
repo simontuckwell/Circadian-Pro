@@ -1063,7 +1063,38 @@ def _has_color_mode_changed(
     old_mode = color_mode(old_attributes)
     new_mode = color_mode(new_attributes)
 
-    # Check if mode changed
+    # Philips Hue rooms may advertise XY but not native RGB. In that case
+    # light.turn_on(rgb_color=...) is translated by the bridge to XY, while
+    # HA reports a derived rgb_color nearly identical to our requested RGB.
+    # A representation-only round trip must not trigger manual override.
+    # Require a genuinely small difference: a Hue scene changing the actual
+    # colour must still be detected as a manual adjustment.
+    if old_mode == ColorMode.RGB and new_mode == ColorMode.XY:
+        native_modes = new_attributes.get(ATTR_SUPPORTED_COLOR_MODES) or ()
+        requested_rgb = old_attributes.get(ATTR_RGB_COLOR)
+        reported_rgb = new_attributes.get(ATTR_RGB_COLOR)
+        if (
+            ColorMode.XY in native_modes
+            and ColorMode.RGB not in native_modes
+            and isinstance(requested_rgb, (tuple, list))
+            and isinstance(reported_rgb, (tuple, list))
+            and len(requested_rgb) == len(reported_rgb) == 3
+            and all(
+                isinstance(value, (int, float))
+                for value in (*requested_rgb, *reported_rgb)
+            )
+        ):
+            deviation = color_difference_redmean(requested_rgb, reported_rgb)
+            if deviation <= 16:
+                _LOGGER.debug(
+                    "Treating RGB to XY report for '%s' as Hue colour "
+                    "normalisation (requested=%s, reported=%s, "
+                    "redmean difference=%.1f, context.id='%s')",
+                    light, requested_rgb, reported_rgb, deviation, context.id,
+                )
+                return False
+
+    # All other colour-mode changes (and real changes of colour) remain manual.
     if old_mode is not None and new_mode is not None and old_mode != new_mode:
         _LOGGER.debug(
             "Light mode of %s changed from %s to %s with context.id='%s'",
