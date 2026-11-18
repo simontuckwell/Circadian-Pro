@@ -93,6 +93,7 @@ from .adaptation_utils import (
     has_effect_attribute,
     manual_control_event_attribute_to_flags,
     prepare_adaptation_data,
+    _remove_redundant_attributes,
 )
 from .calibration import is_calibration_preview_active, is_calibration_preview_context
 from .color_and_brightness import SunLightSettings
@@ -1950,6 +1951,37 @@ class CircadianProSwitch(SwitchEntity, RestoreEntity):
                     self.manager.our_last_state_on_change.pop(light, None)
                     self.manager.clear_proactively_adapting(light)
                 raise
+
+        # If an initial target already matched the device, redundant-command
+        # filtering could suppress the service call entirely. Remember only
+        # those *verified, unchanged* target attributes so a later Hue-app
+        # adjustment can still be recognised as manual control.
+        target = getattr(data, "target_service_data", None)
+        if self._skip_redundant_commands and target:
+            light = data.entity_id
+            state = self.hass.states.get(light)
+            if state is not None and state.state == STATE_ON:
+                not_matching = _remove_redundant_attributes(target, state)
+                matching = {
+                    key: value for key, value in target.items()
+                    if key in BRIGHTNESS_ATTRS | COLOR_ATTRS and key not in not_matching
+                }
+                if matching:
+                    baseline = self.manager.last_service_data.setdefault(light, {})
+                    seeded = []
+                    for attributes in (BRIGHTNESS_ATTRS, COLOR_ATTRS):
+                        if not any(key in baseline for key in attributes):
+                            for key, value in matching.items():
+                                if key in attributes:
+                                    baseline[key] = value
+                                    seeded.append(key)
+                    if seeded:
+                        self.manager.last_service_context.setdefault(light, data.context.id)
+                        _LOGGER.debug(
+                            "%s: Recorded unchanged target attributes %s for '%s' "
+                            "as a manual-change baseline (no command needed)",
+                            self._name, seeded, light,
+                        )
 
     async def execute_cancellable_adaptation_calls(
         self,
