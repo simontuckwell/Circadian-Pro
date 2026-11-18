@@ -554,11 +554,12 @@ const COPY = {
     timingDiagram: {
       sunrise: "Amanecer", sunset: "Atardecer", minimum: "Mín.", maximum: "Máx.",
       title: "Vista de la curva", brightness: "Brillo", temperature: "Temperatura de color",
-      modes: { default: "Natural", linear: "Lineal", tanh: "Sigmoide" },
+      modes: { default: "Natural", linear: "Lineal", tanh: "Sigmoide", solar_elevation: "Elevación solar" },
       caption: "{date} · {timezone}",
       loading: "Calculando los horarios de hoy…", unavailable: "No se pudieron calcular los horarios solares de hoy.",
       invalidSolar: "Revisa los horarios y desplazamientos del amanecer y atardecer.", retry: "Reintentar",
       natural: "El brillo llega al máximo al amanecer y se mantiene hasta el atardecer. La temperatura de color sigue su propia curva solar.",
+      solar_elevation: "El brillo sigue la altura real del Sol hasta alcanzar el máximo al mediodía solar. La temperatura de color conserva su curva independiente. Los ajustes horarios del amanecer y atardecer no afectan a este modo.",
       independent: "La temperatura de color sigue su propia curva solar.",
       synchronized: "La temperatura de color sigue esta misma curva entre sus propios límites.",
       temperatureScale: "El fondo representa la temperatura de color: naranja en el mínimo y blanco en el máximo. Los colores son orientativos.",
@@ -636,11 +637,12 @@ const COPY = {
     timingDiagram: {
       sunrise: "Sunrise", sunset: "Sunset", minimum: "Min.", maximum: "Max.",
       title: "Curve preview", brightness: "Brightness", temperature: "Color temperature",
-      modes: { default: "Natural", linear: "Linear", tanh: "Sigmoid" },
+      modes: { default: "Natural", linear: "Linear", tanh: "Sigmoid", solar_elevation: "Solar Elevation" },
       caption: "{date} · {timezone}",
       loading: "Calculating today’s schedule…", unavailable: "Today’s solar schedule could not be calculated.",
       invalidSolar: "Check sunrise and sunset times and offsets.", retry: "Retry",
       natural: "Brightness reaches its maximum at sunrise and stays there until sunset. Color temperature follows its own solar curve.",
+      solar_elevation: "Brightness follows the Sun's actual height, from minimum at the horizon to maximum at solar noon. Color temperature keeps its existing independent curve. Custom sunrise/sunset offsets do not affect this brightness mode.",
       independent: "Color temperature follows its own solar curve.",
       synchronized: "Color temperature follows this same curve between its own limits.",
       temperatureScale: "The background represents color temperature: orange at its minimum and white at its maximum. Colors are illustrative.",
@@ -747,7 +749,7 @@ function element(tag, text, className) {
 // Solar context is supplied by HA in its own timezone. Plot x values are elapsed
 // minutes from that local midnight, so DST days naturally span 23 or 25 hours.
 const SOLAR_FIELDS = [...OPTIONAL_TIMES, "sunrise_offset_minutes", "sunset_offset_minutes",
-  "sleep_activation_mode", "sleep_schedule_start", "sleep_schedule_end"];
+  "sleep_activation_mode", "sleep_schedule_start", "sleep_schedule_end", "brightness_mode"];
 
 export function solarDraft(values) {
   return Object.fromEntries(SOLAR_FIELDS.filter((name) => Object.hasOwn(values, name)).map((name) => [name, values[name]]));
@@ -874,6 +876,14 @@ function solarPosition(minute, context) {
 // the same bracketing events (solar noon need not be the midpoint of daylight).
 export function brightnessTimingValue(minute, mode, light, dark, context) {
   if (mode === "default") return Math.min(1, 1 + solarPosition(minute, context));
+  if (mode === "solar_elevation") {
+    const samples = context.solar_elevation_samples;
+    if (!Array.isArray(samples) || samples.length < 2) return NaN;
+    const next = samples.findIndex(([time]) => time >= minute);
+    if (next <= 0) return (next === -1 ? samples.at(-1) : samples[0])[1];
+    const [leftTime, leftValue] = samples[next - 1], [rightTime, rightValue] = samples[next];
+    return leftValue + (rightValue - leftValue) * (minute - leftTime) / (rightTime - leftTime);
+  }
   const pair = solarPair(minute, context);
   const event = pair.find((item) => item.event === "sunrise") || pair.find((item) => item.event === "sunset");
   const elapsed = minute - (event.timestamp - context.day_start) / 60;
@@ -886,7 +896,13 @@ export function brightnessTimingValue(minute, mode, light, dark, context) {
 }
 
 export function brightnessTimingPoints(mode, light, dark, context) {
-  if (!validSolarContext(context) || !["default", "linear", "tanh"].includes(mode)) return null;
+  if (!validSolarContext(context) || !["default", "linear", "tanh", "solar_elevation"].includes(mode)) return null;
+  if (mode === "solar_elevation") {
+    const samples = context.solar_elevation_samples;
+    return Array.isArray(samples) && samples.length >= 2 && samples.every((point) =>
+      Array.isArray(point) && point.length === 2 && Number.isFinite(point[0])
+      && Number.isFinite(point[1]) && point[1] >= 0 && point[1] <= 1) ? samples : null;
+  }
   if (mode !== "default" && [light, dark].some((value) => !Number.isInteger(value) || value < 0 || value > 240)) return null;
   const endOfDay = (context.day_end - context.day_start) / 60;
   const eventMinutes = context.events.map((item) => ({ ...item, minute: (item.timestamp - context.day_start) / 60 }));
@@ -985,7 +1001,7 @@ export function nightTimingPoints(values, context) {
   const mode = values.brightness_mode;
   const light = values.brightness_mode_time_light_minutes;
   const dark = values.brightness_mode_time_dark_minutes;
-  const shared = mode !== "default" && values.apply_temperature_curve === true;
+  const shared = ["linear", "tanh"].includes(mode) && values.apply_temperature_curve === true;
   const brightness = brightnessTimingPoints(mode, light, dark, context);
   const temperature = temperatureTimingPoints(mode, light, dark, shared, context);
   const minimum = graphDefault(values.min_brightness, 50), maximum = graphDefault(values.max_brightness, 100);
@@ -1168,7 +1184,7 @@ export function brightnessTimingDiagram(copy, language = "en", onRetry = () => {
     const nightPoints = night && context?.sleep_mode === (values.sleep_activation_mode ?? context?.sleep_mode) ? nightTimingPoints(values, context) : null;
     const brightnessError = brightnessGraphError(values);
     const points = brightnessError ? null : night ? nightPoints : brightnessTimingPoints(mode, light, dark, context);
-    const shared = mode !== "default" && values.apply_temperature_curve === true;
+    const shared = ["linear", "tanh"].includes(mode) && values.apply_temperature_curve === true;
     legend.textContent = `${copy.modes[mode] || ""} · ${copy.brightness}`;
     plot.hidden = !points;
     status.hidden = Boolean(points);
@@ -1242,10 +1258,11 @@ export function brightnessTimingDiagram(copy, language = "en", onRetry = () => {
     const format = (template) => template.replaceAll("{light}", String(light)).replaceAll("{dark}", String(dark)).replaceAll("{total}", String(light + dark));
     // Keep the detailed interpretation available to screen readers without
     // repeating the form's explanations beneath the visible graph.
-    const duration = mode === "default" ? copy.natural : light + dark === 0 ? copy.step : format(copy[mode]);
+    const duration = mode === "default" ? copy.natural : mode === "solar_elevation" ? copy.solar_elevation
+      : light + dark === 0 ? copy.step : format(copy[mode]);
     const description = [legend.textContent,
-      ...(mode === "default" || light + dark === 0 ? [] : [format(copy.rise), format(copy.fall)]), duration,
-      ...(mode === "default" ? [] : [shared ? copy.synchronized : copy.independent]), night ? detailText.textContent : copy.temperatureScale,
+      ...(["default", "solar_elevation"].includes(mode) || light + dark === 0 ? [] : [format(copy.rise), format(copy.fall)]), duration,
+      ...(["default", "solar_elevation"].includes(mode) ? [] : [shared ? copy.synchronized : copy.independent]), night ? detailText.textContent : copy.temperatureScale,
       caption.textContent, `${copy.sunrise} ${context.sunrise.local_time}. ${copy.sunset} ${context.sunset.local_time}.`,
       ...edges.map((edge) => `${edge.name} ${clock(edge.timestamp)}.`)].join(" ");
     title.textContent = description;
@@ -1266,7 +1283,7 @@ function generalSettings(fields, renderField, titles, timingDiagram) {
     let timingRow, modeSelector, activeMode;
     const updateTimingVisibility = () => {
       if (!timingRow || !modeSelector) return;
-      timingRow.hidden = modeSelector.value === "default";
+      timingRow.hidden = ["default", "solar_elevation"].includes(modeSelector.value);
       for (const input of timingRow.querySelectorAll("input")) {
         // Hidden Natural windows are retained in the draft, but cannot block
         // native validation of a legacy value outside the new panel bounds.
@@ -1286,7 +1303,7 @@ function generalSettings(fields, renderField, titles, timingDiagram) {
         const choice = renderField(remaining.get("brightness_mode"), (input) => {
           // Do not conceal an invalid edit when switching to Natural. Keep
           // the editable control visible and let native validation explain it.
-          if (input.value === "default" && timingRow
+          if (["default", "solar_elevation"].includes(input.value) && timingRow
             && ![...timingRow.querySelectorAll("input")].every((control) => control.reportValidity())) {
             input.value = activeMode;
             return false;
