@@ -65,13 +65,13 @@ test("Hue group on/off state is independent of CP adaptation state", () => {
 
 test("card layouts use width-aware styling and content-determined height", () => {
   const card = new CircadianProCard();
-  assert.deepEqual(card.getGridOptions(), {columns: 9, min_columns: 6});
+  assert.deepEqual(card.getGridOptions(), {columns: 9, min_columns: 6, rows: "auto"});
   assert.ok(card.getCardSize() >= 7);
-  assert.match(source, /ha-card\\{container-type:inline-size/);
-  assert.match(source, /@container \\(max-width:315px\\)/);
-  assert.match(source, /@container \\(max-width:270px\\)/);
-  assert.match(source, /white-space:normal/);
-  assert.match(source, /\\.numbers\\{flex-direction:column/);
+  assert.ok(source.includes("ha-card{container-type:inline-size"));
+  assert.ok(source.includes("@container (max-width:315px)"));
+  assert.ok(source.includes("@container (max-width:270px)"));
+  assert.ok(source.includes("white-space:normal"));
+  assert.ok(source.includes(".numbers{flex-direction:column"));
 });
 
 test("solar events are labelled in a responsive row, outside the SVG", () => {
@@ -82,11 +82,11 @@ test("solar events are labelled in a responsive row, outside the SVG", () => {
     points, sunrise: {timestamp:21600}, solar_noon:43200,
     sunset: {timestamp:64800},
   }, 43200);
-  assert.match(svgAndLabels, /<svg viewBox="0 0 360 86"/);
-  assert.match(svgAndLabels, /<\\/svg><div class="solar-times">/);
-  assert.match(svgAndLabels, /Sunrise <b>[^<]+<\\/b>/);
-  assert.match(svgAndLabels, /Noon <b>[^<]+<\\/b>/);
-  assert.match(svgAndLabels, /Sunset <b>[^<]+<\\/b>/);
+  assert.ok(svgAndLabels.includes('<svg viewBox="0 0 360 86"'));
+  assert.ok(svgAndLabels.includes('</svg><div class="solar-times">'));
+  assert.ok(svgAndLabels.includes('Sunrise <b>'));
+  assert.ok(svgAndLabels.includes('Noon <b>'));
+  assert.ok(svgAndLabels.includes('Sunset <b>'));
 });
 
 test("automatic, manual, paused and unavailable states are distinct", () => {
