@@ -3050,6 +3050,14 @@ class CircadianProManager:
         """Get the attributes for a light that are manually controlled."""
         return self.manual_control.get(light, LightControlAttributes.NONE)
 
+    def _notify_manual_state_change(self, light: str) -> None:
+        """Publish the new manual flags immediately for live dashboard cards."""
+        for switch in getattr(self, "switches", ()):
+            if light in switch.lights and switch.is_on:
+                callback = getattr(switch, "async_write_ha_state", None)
+                if callback is not None:
+                    callback()
+
     def _log_activity_for_light(
         self, light: str, message: str, context: Context | None = None,
     ) -> None:
@@ -3074,6 +3082,8 @@ class CircadianProManager:
         )
         previous = self.get_manual_control_attributes(light)
         self.manual_control[light] = attributes
+        if previous != attributes and not getattr(self, "_disabled", False):
+            self._notify_manual_state_change(light)
         if not previous.has_any() and attributes.has_any() and not getattr(self, "_disabled", False):
             state = self.hass.states.get(light)
             light_name = getattr(state, "name", light)
@@ -3233,6 +3243,8 @@ class CircadianProManager:
                     "Light %s: Clearing manual control attributes.", light,
                 )
                 self.manual_control[light] = LightControlAttributes.NONE
+                if previous.has_any() and not getattr(self, "_disabled", False):
+                    self._notify_manual_state_change(light)
                 if timer := self.auto_reset_manual_control_timers.pop(light, None):
                     timer.cancel()
             self.our_last_state_on_change.pop(light, None)
