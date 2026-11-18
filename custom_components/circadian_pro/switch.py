@@ -48,6 +48,7 @@ from homeassistant.const import (
     CONF_PARAMS,
     EVENT_CALL_SERVICE,
     EVENT_HOMEASSISTANT_STARTED,
+    EVENT_LOGBOOK_ENTRY,
     EVENT_STATE_CHANGED,
     SERVICE_TOGGLE,
     SERVICE_TURN_OFF,
@@ -559,13 +560,14 @@ async def async_setup_entry(  # noqa: PLR0915
                     switch.manager.set_manual_control_attributes(
                         light,
                         manual_attributes,
+                        context=service_call.context,
                     )
                     switch.fire_manual_control_event(
                         light,
                         service_call.context,
                     )
             else:
-                switch.manager.reset(*all_lights)
+                switch.manager.reset(*all_lights, reason="service", context=service_call.context)
                 if switch.is_on:
                     context = switch.create_context(
                         "service",
@@ -1404,6 +1406,8 @@ class CircadianProSwitch(SwitchEntity, RestoreEntity):
         else:
             self._state = False
             assert not self.remove_listeners
+        # Restored state is not a deliberate pause/resume action.
+        self._activity_initialized = True
 
     def _expand_light_groups(
         self, hass: HomeAssistant | None = None, *, rebuild: bool = False,
@@ -1508,6 +1512,17 @@ class CircadianProSwitch(SwitchEntity, RestoreEntity):
         self._context_cnt += 1
         return context
 
+    def log_activity(self, message: str, context: Context | None = None) -> None:
+        """Record a meaningful profile decision in Home Assistant Activity."""
+        if not self.entity_id or not self.hass.is_running:
+            return
+        self.hass.bus.async_fire(
+            EVENT_LOGBOOK_ENTRY,
+            {"name": self._name, "message": message,
+             ATTR_ENTITY_ID: self.entity_id, ATTR_DOMAIN: SWITCH_DOMAIN},
+            context=context,
+        )
+
     async def async_turn_on(  # type: ignore[override]
         self,
         adapt_lights: bool = True,
@@ -1529,6 +1544,8 @@ class CircadianProSwitch(SwitchEntity, RestoreEntity):
                 transition=self.initial_transition,
                 force=True,
             )
+        if getattr(self, "_activity_initialized", False):
+            self.log_activity("Automatic adaptation resumed (profile enabled)")
 
     async def async_turn_off(self, **kwargs: Any) -> None:  # noqa: ARG002
         """Turn off circadian pro."""
@@ -1536,7 +1553,9 @@ class CircadianProSwitch(SwitchEntity, RestoreEntity):
             return
         self._state = False
         self._remove_listeners()
-        self.manager.reset(*self.lights)
+        self.manager.reset(*self.lights, reason="profile_paused")
+        if getattr(self, "_activity_initialized", False):
+            self.log_activity("Adaptation paused (profile disabled)")
 
     async def _async_update_at_interval_action(
         self,
@@ -2162,7 +2181,7 @@ class CircadianProSwitch(SwitchEntity, RestoreEntity):
                 entity_id,
                 event.context.id,
             )
-            self.manager.set_manual_control_attributes(entity_id)
+            self.manager.set_manual_control_attributes(entity_id, context=event.context)
             return
 
         if (
@@ -2209,7 +2228,13 @@ class CircadianProSwitch(SwitchEntity, RestoreEntity):
             event,
         )
         # Reset the manually controlled status when the "sleep mode" changes
-        self.manager.reset(*self.lights)
+        self.manager.reset(*self.lights, reason="sleep_mode", context=event.context)
+        if getattr(self, "_activity_initialized", False):
+            state = event.data["new_state"].state
+            self.log_activity(
+                "Sleep mode activated" if state == STATE_ON else "Sleep mode ended",
+                context=event.context,
+            )
         await self._update_attrs_and_maybe_adapt_lights(
             context=self.create_context("sleep", parent=event.context),
             transition=self._sleep_transition,
@@ -3020,10 +3045,20 @@ class CircadianProManager:
         """Get the attributes for a light that are manually controlled."""
         return self.manual_control.get(light, LightControlAttributes.NONE)
 
+    def _log_activity_for_light(
+        self, light: str, message: str, context: Context | None = None,
+    ) -> None:
+        """Associate manual-control decisions with the corresponding profiles."""
+        for switch in getattr(self, "switches", ()):
+            if light in switch.lights and switch.is_on:
+                switch.log_activity(message, context=context)
+
     def set_manual_control_attributes(
         self,
         light: str,
         attributes: LightControlAttributes = LightControlAttributes.ALL,
+        *,
+        context: Context | None = None,
     ) -> None:
         """Mark attributes of a light as manually controlled."""
         _LOGGER.debug(
@@ -3032,7 +3067,21 @@ class CircadianProManager:
             attributes,
             self.manual_control.get(light, LightControlAttributes.NONE),
         )
+        previous = self.get_manual_control_attributes(light)
         self.manual_control[light] = attributes
+        if not previous.has_any() and attributes.has_any() and not getattr(self, "_disabled", False):
+            state = self.hass.states.get(light)
+            light_name = state.name if state is not None else light
+            parts = []
+            if LightControlAttributes.BRIGHTNESS in attributes:
+                parts.append("brightness")
+            if LightControlAttributes.COLOR in attributes:
+                parts.append("colour")
+            self._log_activity_for_light(
+                light,
+                f"Manual override detected for {light_name} ({' and '.join(parts)})",
+                context=context,
+            )
         delay = self.auto_reset_manual_control_times.get(light)
 
         async def reset() -> None:
@@ -3042,7 +3091,7 @@ class CircadianProManager:
                 light,
                 delay,
             )
-            self.reset(light)
+            self.reset(light, reason="timeout")
             switches = _switches_with_lights(self.hass, [light])
             for switch in switches:
                 if not switch.is_on:
@@ -3065,6 +3114,8 @@ class CircadianProManager:
         self,
         light: str,
         attributes: LightControlAttributes,
+        *,
+        context: Context | None = None,
     ) -> None:
         """Add attributes to the manual control status of a light."""
         current = self.get_manual_control_attributes(light)
@@ -3075,7 +3126,7 @@ class CircadianProManager:
             current,
         )
         new = current | attributes
-        self.set_manual_control_attributes(light, new)
+        self.set_manual_control_attributes(light, new, context=context)
 
     def get_adaption_control_attributes(
         self,
@@ -3149,13 +3200,32 @@ class CircadianProManager:
             # color_task might be the same as brightness_task
             color_task.cancel()
 
-    def reset(self, *lights: str, reset_manual_control: bool = True) -> None:
-        """Reset the 'manual_control' status of the lights."""
+    def reset(
+        self, *lights: str, reset_manual_control: bool = True,
+        reason: str = "reset", context: Context | None = None,
+    ) -> None:
+        """Reset a light, recording actual manual-to-automatic transitions."""
         for light in lights:
             if reset_manual_control:
+                previous = self.get_manual_control_attributes(light)
+                if previous.has_any() and not getattr(self, "_disabled", False):
+                    state = self.hass.states.get(light)
+                    light_name = state.name if state is not None else light
+                    explanations = {
+                        "light_off": "light switched off",
+                        "profile_paused": "profile paused",
+                        "service": "resumed by user",
+                        "timeout": "automatic timeout",
+                        "sleep_mode": "sleep mode changed",
+                    }
+                    suffix = explanations.get(reason)
+                    explanation = f" ({suffix})" if suffix else ""
+                    self._log_activity_for_light(
+                        light, f"Manual override cleared for {light_name}{explanation}",
+                        context=context,
+                    )
                 _LOGGER.debug(
-                    "Light %s: Clearing manual control attributes.",
-                    light,
+                    "Light %s: Clearing manual control attributes.", light,
                 )
                 self.manual_control[light] = LightControlAttributes.NONE
                 if timer := self.auto_reset_manual_control_timers.pop(light, None):
@@ -3357,7 +3427,7 @@ class CircadianProManager:
         if old_on and new_off:
             # Tracks 'on' → 'off' state changes
             self.on_to_off_event[entity_id] = event
-            self.reset(entity_id)
+            self.reset(entity_id, reason="light_off", context=event.context)
             _LOGGER.debug(
                 "Detected an 'on' → 'off' event for '%s' with context.id='%s'",
                 entity_id,
@@ -3434,7 +3504,7 @@ class CircadianProManager:
 
         # Light was already on and 'light.turn_on' was not called by
         # the circadian_pro integration.
-        self.add_manual_control_attributes(light, turn_on_attributes)
+        self.add_manual_control_attributes(light, turn_on_attributes, context=turn_on_event.context)
         switch.fire_manual_control_event(light, turn_on_event.context)
         _LOGGER.debug(
             "'%s' was already on and 'light.turn_on' was not called by the"
@@ -3478,8 +3548,7 @@ class CircadianProManager:
             return
 
         self.add_manual_control_attributes(
-            light,
-            significantly_changed_attributes,
+            light, significantly_changed_attributes, context=context,
         )
         switch.fire_manual_control_event(light, context)
 
