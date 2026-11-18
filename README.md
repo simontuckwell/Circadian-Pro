@@ -110,6 +110,13 @@ modes continue to show their live targets and controls, without a misleading
 solar-brightness plot. When a profile is paused, the displayed targets are its
 **last calculated values**, not a measurement of the physical lights.
 
+On narrow screens the card sizes itself against its **own width**, rather
+than the phone's viewport. In a Sections dashboard, give it sufficient width
+for two readings side by side and set **Layout → Fit height to content** for
+existing cards. The custom card now recommends a wider default and
+`grid_options.rows: auto` for newly placed cards; HA may retain previously
+saved fixed layout settings until they are changed in the editor.
+
 The graph is read-only and uses a permission-checked WebSocket command. The
 pause toggle uses `switch.turn_on` / `switch.turn_off`, and the manual Resume
 action uses `circadian_pro.set_manual_control`. Normal Home Assistant entity
