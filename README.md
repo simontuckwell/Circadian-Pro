@@ -68,6 +68,50 @@ Native switch names are translated using Home Assistant's **server language**, a
 - Interception of `light.turn_on` and `light.toggle`.
 - Home Assistant services for applying settings and managing manual control.
 
+## Solar dashboard card (experimental)
+
+This fork includes a self-contained **Circadian Pro** dashboard card. It reads the
+current brightness and colour-temperature *targets* from a profile switch and
+plots the genuine Solar Elevation brightness curve supplied by the Python engine.
+It also displays **Automatic**, **Manual**, **Paused** or **Unavailable** and has
+a discreet toggle for pausing/resuming the profile. In Manual mode, **Resume
+automatic** releases the override using CP's existing service. Routine light
+changes are never sent directly from the card.
+
+### Add it in Home Assistant (no terminal required)
+
+1. Update the Circadian Pro fork through **Settings → Marketplace** and **restart
+   Home Assistant**. The Marketplace integration update does not necessarily
+   prompt you to restart.
+2. Open **Settings → Dashboards → ⋮ → Resources**. Add a **JavaScript module**
+   resource with URL `/circadian_pro_static/circadian-pro-card.js`. This uses the
+   file served by the existing CP integration; do not download or copy JavaScript.
+3. Edit your dashboard, **Add card**, select **Circadian Pro**, then select the
+   main switch for the profile (not the associated Sleep or Adapt switches).
+   The card also supports a Manual card configuration:
+
+   ```yaml
+   type: custom:circadian-pro-card
+   entity: switch.circadian_pro_simon_s_study
+   name: Simon's Study
+   icon: mdi:desk
+   ```
+
+4. Reload the dashboard if the card does not appear immediately. On subsequent
+   integration updates, restart HA and fully reload the browser page.
+
+The solar curve uses HA's configured location and timezone, including daylight
+saving transitions. Its marker is based on the server's time, not the browser's
+clock. The curve is available for **Solar Elevation** profiles; other brightness
+modes continue to show their live targets and controls, without a misleading
+solar-brightness plot. When a profile is paused, the displayed targets are its
+**last calculated values**, not a measurement of the physical lights.
+
+The graph is read-only and uses a permission-checked WebSocket command. The
+pause toggle uses `switch.turn_on` / `switch.turn_off`, and the manual Resume
+action uses `circadian_pro.set_manual_control`. Normal Home Assistant entity
+and service permissions still apply.
+
 ## Installation
 
 ### Requirements
