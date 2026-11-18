@@ -120,7 +120,9 @@ class SunEvents:
         elevation = self.astral_location.solar_elevation(dt)
         if elevation <= 0:
             return 0.0
-        noon = self.astral_location.noon(dt, local=False)
+        # Use the profile's local solar date, including near UTC midnight.
+        local_date = dt.astimezone(self.timezone).date()
+        noon = self.astral_location.noon(local_date, local=False)
         maximum = self.astral_location.solar_elevation(noon)
         if maximum <= 0:
             return 0.0
