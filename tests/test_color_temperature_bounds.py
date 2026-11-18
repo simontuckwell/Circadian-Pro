@@ -267,6 +267,7 @@ class ProtocolHarness:
         rgb_fixtures = {
             1000: (255, 56, 0),
             1200: (255, 80, 0),
+            2200: (255, 150, 55),
             3500: (255, 200, 180),
             4000: (255, 228, 206),
             10000: (205, 228, 255),
@@ -401,6 +402,43 @@ class ColorTemperatureBoundsTests(unittest.TestCase):
                 self.assertEqual(
                     harness.manager.last_service_data[harness.light], payload
                 )
+
+    def test_hue_group_rounding_at_warm_endpoint_uses_native_ct(self):
+        # Real Hue room: CT and XY are advertised even though its Being lamps
+        # only need warm/cool whites. 2200 K rounds to 2202 K at the mired
+        # boundary, and the former implementation unexpectedly used RGB.
+        harness = ProtocolHarness(modes=("color_temp", "xy"), bounds=(2202, 6535))
+        payload = harness.dispatch(2200)
+        self.assertEqual(payload["color_temp_kelvin"], 2202)
+        self.assertNotIn("rgb_color", payload)
+        self.assertEqual(
+            harness.manager.last_service_data[harness.light]["color_temp_kelvin"],
+            2202,
+        )
+
+        # The room may report 2257 K after an acknowledged CT operation.
+        # That is within the existing 100 K significance tolerance, and
+        # it must not be reported as an external change of colour mode.
+        harness.state.attributes.update(
+            color_mode="color_temp", color_temp_kelvin=2257, brightness=255,
+        )
+        self.assertEqual(
+            harness.detect_manual_change(),
+            harness.ns["LightControlAttributes"].NONE,
+        )
+
+        # A genuine Hue-app adjustment must still trigger the override.
+        harness.state.attributes["color_temp_kelvin"] = 2700
+        self.assertEqual(
+            harness.detect_manual_change(),
+            harness.ns["LightControlAttributes"].COLOR,
+        )
+
+    def test_far_outside_ct_limit_still_allows_rgb_fallback(self):
+        harness = ProtocolHarness(modes=("color_temp", "xy"), bounds=(2202, 6535))
+        payload = harness.dispatch(1200)
+        self.assertIn("rgb_color", payload)
+        self.assertNotIn("color_temp_kelvin", payload)
 
     def test_rgbw_calibration_keeps_requested_kelvin(self):
         harness = ProtocolHarness(modes=("rgbw",))
