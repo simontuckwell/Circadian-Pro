@@ -7,7 +7,10 @@ const CSS = [
 "ha-card{overflow:hidden;border-radius:19px;box-shadow:var(--ha-card-box-shadow,0 2px 10px #0001)}",
 ".main{padding:20px 21px 16px}.head,.identity,.actions,.numbers,.bottom,.mode{display:flex;align-items:center}",
 ".head,.bottom{justify-content:space-between;gap:10px}.identity{gap:11px;min-width:0}",
-".icon{display:grid;place-items:center;width:37px;height:37px;border-radius:12px;background:color-mix(in srgb,var(--primary-color,#2796bd) 10%,transparent);color:var(--primary-color,#2796bd);flex-shrink:0}",
+".icon{display:grid;place-items:center;width:37px;height:37px;border-radius:12px;background:color-mix(in srgb,var(--primary-color,#2796bd) 10%,transparent);color:var(--primary-color,#2796bd);flex-shrink:0;transition:background .2s,color .2s,box-shadow .2s}",
+".icon.lit{background:rgba(251,188,66,.20);color:#c28a25;box-shadow:inset 0 0 0 1px rgba(223,153,34,.16),0 0 10px rgba(244,176,54,.14)}",
+".icon.lit ha-icon{filter:drop-shadow(0 0 2px rgba(238,169,43,.48))}",
+".icon.dark{background:var(--secondary-background-color,#8882);color:var(--secondary-text-color);opacity:.75}",
 ".icon ha-icon{--mdc-icon-size:23px}.name{font-size:17px;font-weight:650;letter-spacing:-.3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
 ".subname{margin-top:1px;font-size:11px;color:var(--secondary-text-color)}.actions{gap:9px;flex-shrink:0}",
 ".pill{border-radius:99px;padding:5px 10px;font-size:11px;font-weight:700}",
@@ -33,7 +36,7 @@ const CSS = [
 ".resume:disabled{opacity:.4;cursor:wait}.note{font-size:11px;color:var(--secondary-text-color);line-height:1.5;padding:12px;text-align:center}",
 ".error{color:var(--error-color,#c53c3c);padding:7px 0 0;font-size:11px}",
 "@media(max-width:350px){.main{padding:16px 13px 12px}.name{font-size:15px}.metric{padding:10px}.metric-value{font-size:23px}.pill{padding:4px 7px}.actions{gap:5px}}",
-"@media(prefers-reduced-motion:reduce){.toggle,.knob{transition:none}}"
+"@media(prefers-reduced-motion:reduce){.toggle,.knob,.icon{transition:none}}"
 ].join("");
 
 export function escapeHtml(value) {
@@ -44,6 +47,16 @@ export function profileStatus(state, attrs={}) {
  if (state === "off") return "Paused";
  const m=attrs.manual_control;
  return (Array.isArray(m) ? m.length>0 : Boolean(m)) ? "Manual" : "Automatic";
+}
+export function lightGroupStatus(lightEntityIds, states={}) {
+ // The light group, not the adaptation switch, defines whether a room is lit.
+ // If any member is on, the group is on; only an entirely off group is off.
+ // Missing or unavailable states must not be mistaken for lights being off.
+ if(!Array.isArray(lightEntityIds) || lightEntityIds.length===0)return "unknown";
+ const statuses=lightEntityIds.map(id=>states?.[id]?.state);
+ if(statuses.includes("on"))return "on";
+ if(statuses.every(status=>status==="off"))return "off";
+ return "unknown";
 }
 export function interpolatePoints(points, time) {
  if (!Array.isArray(points) || !points.length || !Number.isFinite(time)) return null;
@@ -175,8 +188,11 @@ export class CircadianProCard extends HTMLElement {
    Number.isFinite(attrs.last_target_color_temp_kelvin)?attrs.last_target_color_temp_kelvin:this._last?.kelvin;
   if(on && Number.isFinite(brightness) && Number.isFinite(kelvin))this._last={brightness,kelvin};
   const curve=this._curve?.entity===entity?this._curve:null;
+  const lightState=lightGroupStatus(curve?.light_entity_ids,this._hass?.states);
+  const lightLabel=lightState==="on"?"Lights on":lightState==="off"?"Lights off":"Light status unavailable";
   const name=escapeHtml(profileName(state,this._config));
-  const icon=escapeHtml(this._config.icon||"mdi:lightbulb-group-outline");
+  const icon=escapeHtml(this._config.icon||
+    (lightState==="on"?"mdi:lightbulb-group":"mdi:lightbulb-group-outline"));
   const brightnessText=Number.isFinite(brightness)?Math.round(brightness):"—";
   const kelvinText=Number.isFinite(kelvin)?Math.round(kelvin).toLocaleString():"—";
   const footer=attrs.sleep_active===true ||
@@ -185,7 +201,8 @@ export class CircadianProCard extends HTMLElement {
   const now=this._now();
   this.shadowRoot.innerHTML=
    '<style>'+CSS+'</style><ha-card><div class="main">'+
-    '<div class="head"><div class="identity"><div class="icon"><ha-icon icon="'+icon+'"></ha-icon></div>'+
+    '<div class="head"><div class="identity"><div class="icon '+(lightState==="on"?"lit":lightState==="off"?"dark":"unknown")+
+      '" role="img" aria-label="'+lightLabel+'" title="'+lightLabel+'"><ha-icon icon="'+icon+'"></ha-icon></div>'+
      '<div style="min-width:0"><div class="name">'+name+'</div><div class="subname">Circadian Pro</div></div></div>'+
      '<div class="actions"><span class="pill '+status.toLowerCase()+'">'+status+'</span>'+
      '<button class="toggle" type="button" role="switch" aria-checked="'+on+'" aria-label="'+(on?"Pause":"Resume")+' circadian adaptation" title="'+(on?"Pause":"Resume")+' adaptation"'+
