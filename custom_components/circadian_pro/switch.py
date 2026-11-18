@@ -1759,7 +1759,16 @@ class CircadianProSwitch(SwitchEntity, RestoreEntity):
                     service_data[ATTR_RGBW_COLOR] = (cal_rgb[0], cal_rgb[1], cal_rgb[2], w)
                 elif "color_temp" in features and (
                     "color" not in features
-                    or (not prefer_rgb_color and min_kelvin <= target_kelvin <= max_kelvin)
+                    # Hue exposes its CT bounds via integer mireds. The
+                    # Kelvin conversion can put a configured endpoint a few
+                    # degrees outside that interval (e.g. 2200 K vs 2202 K).
+                    # Prefer native CT and clamp such rounding differences:
+                    # sending RGB instead can be reported back as COLOR_TEMP
+                    # and falsely interpreted as a manual colour change.
+                    or (
+                        not prefer_rgb_color
+                        and min_kelvin - 10 <= target_kelvin <= max_kelvin + 10
+                    )
                 ):
                     # Keep the sent target within the light's native range so
                     # rejected commands cannot look like external manual changes.
