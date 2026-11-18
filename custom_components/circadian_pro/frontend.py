@@ -32,6 +32,7 @@ from .const import DOMAIN, EXTRA_VALIDATION, NONE_STR, VALIDATION_TUPLES, _DOMAI
 FRONTEND_DATA = "circadian_pro_frontend"
 PANEL_PATH = "circadian-pro-calibration"
 PANEL_URL = "/circadian_pro_static/calibration-panel.js"
+CARD_URL = "/circadian_pro_static/circadian-pro-card.js"
 _LEGACY_CALIBRATION_OPTIONS = {
     "rgb_calibration_r", "rgb_calibration_g", "rgb_calibration_b",
     "combine_rgbctt_or_rgbw", "combine_rgb_scale", "combine_white_scale",
@@ -426,7 +427,9 @@ async def async_setup_frontend(hass: Any) -> None:
     lock = data.setdefault("lock", asyncio.Lock())
     async with lock:
         if not data.get("api_registered"):
-            for handler in (websocket_entries, websocket_preview, websocket_stop, websocket_translations, websocket_solar):
+            from .card import websocket_card_curve
+
+            for handler in (websocket_entries, websocket_preview, websocket_stop, websocket_translations, websocket_solar, websocket_card_curve):
                 websocket_api.async_register_command(hass, handler)
             data["api_registered"] = True
         if not data.get("static_registered"):
@@ -437,6 +440,7 @@ async def async_setup_frontend(hass: Any) -> None:
             await hass.http.async_register_static_paths([
                 StaticPathConfig(PANEL_URL, str(asset_path), False),
                 StaticPathConfig(module_url, str(asset_path), False),
+                StaticPathConfig(CARD_URL, str(Path(__file__).parent / "frontend" / "circadian-pro-card.js"), False),
             ])
             data["module_url"] = module_url
             data["element_name"] = element_name
