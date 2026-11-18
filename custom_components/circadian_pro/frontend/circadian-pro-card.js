@@ -124,7 +124,7 @@ export class CircadianProCard extends HTMLElement {
  getCardSize(){return 8;}
  // Avoid a fixed row count: HA Sections must allocate the card's actual
  // height, especially on phones where header and labels may wrap.
- getGridOptions(){return {columns:9,min_columns:6};}
+ getGridOptions(){return {columns:9,min_columns:6,rows:"auto"};}
  static getStubConfig(){return {entity:""};}
  static getConfigForm(){return {schema:[
   {name:"entity",required:true,selector:{entity:{domain:"switch",integration:"circadian_pro"}}},
