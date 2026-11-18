@@ -3274,7 +3274,7 @@ class CircadianProManager:
 
         def off(eid: str, event: Event) -> None:
             self.turn_off_event[eid] = event
-            self.reset(eid)
+            self.reset(eid, reason="light_off", context=event.context)
 
         async def on(eid: str, event: Event) -> None:
             task = self.sleep_tasks.get(eid)
