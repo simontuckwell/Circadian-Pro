@@ -1487,9 +1487,14 @@ class CircadianProSwitch(SwitchEntity, RestoreEntity):
         """Return the attributes of the switch."""
         extra_state_attributes: dict[str, Any] = {"configuration": self._config}
         if not self.is_on:
+            # Keep the last calculated target available for dashboard cards
+            # without representing it as an actively adapting value.
+            extra_state_attributes["last_target_brightness_pct"] = self._settings.get("brightness_pct")
+            extra_state_attributes["last_target_color_temp_kelvin"] = self._settings.get("color_temp_kelvin")
             for key in self._settings:
                 extra_state_attributes[key] = None
             return extra_state_attributes
+        extra_state_attributes["sleep_active"] = self._effective_sleep_state()
         extra_state_attributes["manual_control"] = [
             light for light in self.lights if self.manager.manual_control.get(light)
         ]
