@@ -53,7 +53,8 @@ Native switch names are translated using Home Assistant's **server language**, a
 
 - Automatic brightness and color-temperature adaptation.
 - Multiple independent Circadian Pro instances.
-- Natural, Linear and Sigmoid brightness modes, with optional shared color-temperature timing in Linear and Sigmoid.
+- Natural, Linear, Sigmoid and **Solar Elevation** brightness modes, with optional shared color-temperature timing in Linear and Sigmoid.
+- Solar Elevation follows actual astronomical solar height: minimum at night and the horizon, maximum at solar noon, and a smooth rise and fall in between. It uses the same daylight normalisation as the original Circadian Lighting project (including its −0.833° reference), with the chosen profile brightness limits. It deliberately ignores configured sunrise/sunset offsets and transition windows; colour temperature remains on its independent curve.
 - Transition windows with synchronized sliders and editable whole numbers from 0 to 240 minutes. Both windows can be zero for a step in the target at sunrise and sunset. Existing values are preserved exactly; YAML and service durations retain their seconds-based format.
 - One interactive curve showing how the selected mode and the two windows affect the transition around sunrise and sunset. Natural hides the two unused windows and shows its own curve.
 - Manual and automatic sleep mode.
