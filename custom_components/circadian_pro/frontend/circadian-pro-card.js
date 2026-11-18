@@ -169,15 +169,19 @@ export class CircadianProCard extends HTMLElement {
   if(!this._config || !this.shadowRoot)return;
   const entity=this._config.entity,state=this._hass?.states?.[entity],attrs=state?.attributes||{};
   const status=profileStatus(state?.state,attrs),on=state?.state==="on";
-  let brightness=on && Number.isFinite(attrs.brightness_pct)?attrs.brightness_pct:this._last?.brightness;
-  let kelvin=on && Number.isFinite(attrs.color_temp_kelvin)?attrs.color_temp_kelvin:this._last?.kelvin;
+  let brightness=on && Number.isFinite(attrs.brightness_pct)?attrs.brightness_pct:
+   Number.isFinite(attrs.last_target_brightness_pct)?attrs.last_target_brightness_pct:this._last?.brightness;
+  let kelvin=on && Number.isFinite(attrs.color_temp_kelvin)?attrs.color_temp_kelvin:
+   Number.isFinite(attrs.last_target_color_temp_kelvin)?attrs.last_target_color_temp_kelvin:this._last?.kelvin;
   if(on && Number.isFinite(brightness) && Number.isFinite(kelvin))this._last={brightness,kelvin};
   const curve=this._curve?.entity===entity?this._curve:null;
   const name=escapeHtml(profileName(state,this._config));
   const icon=escapeHtml(this._config.icon||"mdi:lightbulb-group-outline");
   const brightnessText=Number.isFinite(brightness)?Math.round(brightness):"—";
   const kelvinText=Number.isFinite(kelvin)?Math.round(kelvin).toLocaleString():"—";
-  const footer=curve?.sleep_entity_id && this._hass?.states?.[curve.sleep_entity_id]?.state==="on"?"Sleep mode":(MODES[curve?.mode]||"Circadian Pro");
+  const footer=attrs.sleep_active===true ||
+   (curve?.sleep_entity_id && this._hass?.states?.[curve.sleep_entity_id]?.state==="on")?
+   "Sleep mode":(MODES[curve?.mode]||"Circadian Pro");
   const now=this._now();
   this.shadowRoot.innerHTML=
    '<style>'+CSS+'</style><ha-card><div class="main">'+
