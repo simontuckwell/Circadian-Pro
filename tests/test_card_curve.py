@@ -128,6 +128,7 @@ class CardCurveTests(unittest.TestCase):
         )
         switch = SimpleNamespace(
             entity_id=self.entity_id, _sun_light_settings=self.settings,
+            _configured_lights=["light.study_group"],
             sleep_mode_switch=SimpleNamespace(entity_id="switch.study_sleep"),
         )
         async def executor(fn, *args):
@@ -140,9 +141,53 @@ class CardCurveTests(unittest.TestCase):
         self._invoke(hass, connection)
         payload = results[0][1]
         self.assertEqual(payload["sleep_entity_id"], "switch.study_sleep")
+        self.assertEqual(payload["light_entity_ids"], ["light.study_group"])
         self.assertEqual(payload["points"][1][1], 50)
         self.assertNotIn("configuration", payload)
         self.assertEqual(len(self.calls), 1)
+
+    def test_group_identifier_is_hidden_if_a_light_is_not_readable(self):
+        results = []
+        permissions = SimpleNamespace(
+            check_entity=lambda entity, policy: entity != "light.private_bulb",
+        )
+        connection = SimpleNamespace(
+            user=SimpleNamespace(permissions=permissions),
+            send_error=lambda *args: self.fail(str(args)),
+            send_result=lambda *args: results.append(args),
+        )
+        switch = SimpleNamespace(
+            entity_id=self.entity_id, _sun_light_settings=self.settings,
+            _configured_lights=["light.study_group", "light.private_bulb"],
+        )
+        async def executor(fn, *args):
+            return fn(*args)
+        hass = SimpleNamespace(
+            data={"circadian_pro": {"loaded": {"switch": switch}}},
+            config=SimpleNamespace(time_zone="Europe/London"),
+            async_add_executor_job=executor,
+        )
+        self._invoke(hass, connection)
+        self.assertEqual(results[0][1]["light_entity_ids"], [])
+        self.assertEqual(len(self.calls), 1)
+
+    def test_empty_light_target_list_never_claims_to_be_lit(self):
+        results = []
+        connection = SimpleNamespace(
+            user=SimpleNamespace(permissions=SimpleNamespace(check_entity=lambda *args: True)),
+            send_error=lambda *args: self.fail(str(args)),
+            send_result=lambda *args: results.append(args),
+        )
+        switch = SimpleNamespace(entity_id=self.entity_id, _sun_light_settings=self.settings)
+        async def executor(fn, *args):
+            return fn(*args)
+        hass = SimpleNamespace(
+            data={"circadian_pro": {"loaded": {"switch": switch}}},
+            config=SimpleNamespace(time_zone="Europe/London"),
+            async_add_executor_job=executor,
+        )
+        self._invoke(hass, connection)
+        self.assertEqual(results[0][1]["light_entity_ids"], [])
 
 
 if __name__ == "__main__":
