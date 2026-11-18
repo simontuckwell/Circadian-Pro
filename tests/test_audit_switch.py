@@ -326,6 +326,39 @@ class ActivityLoggingTests(unittest.TestCase):
             self.assertIn(message, self.events[-1][1]["message"])
         self.assertEqual(len(self.events), 4)
 
+    def test_explicit_pause_and_resume_log_but_initial_restore_does_not(self):
+        ns = self.ns
+        load_functions(ns, "switch.py", {"async_turn_on", "async_turn_off"}, "CircadianProSwitch")
+
+        class FakeSwitch:
+            @property
+            def is_on(self):
+                return self._state
+
+        switch = FakeSwitch()
+        switch._name = "Simon's Study"
+        switch.entity_id = self.switch.entity_id
+        switch.hass = self.hass
+        switch._state = False
+        switch._activity_initialized = False
+        switch.lights = ["light.study"]
+        switch.initial_transition = 0
+        switch.manager = SimpleNamespace(reset=lambda *args, **kwargs: None)
+        switch._remove_listeners = lambda: None
+        async def setup_listeners():
+            return None
+        switch._setup_listeners = setup_listeners
+        switch.log_activity = MethodType(ns["log_activity"], switch)
+
+        complete_immediate(ns["async_turn_on"](switch, adapt_lights=False))
+        self.assertEqual(self.events, [])
+        switch._activity_initialized = True
+        complete_immediate(ns["async_turn_off"](switch))
+        complete_immediate(ns["async_turn_on"](switch, adapt_lights=False))
+        self.assertEqual(len(self.events), 2)
+        self.assertIn("paused", self.events[0][1]["message"])
+        self.assertIn("resumed", self.events[1][1]["message"])
+
     def test_no_activity_when_integration_is_shutting_down(self):
         self.manager._disabled = True
         self.manager.set_manual_control_attributes("light.study", self.flags.ALL)
