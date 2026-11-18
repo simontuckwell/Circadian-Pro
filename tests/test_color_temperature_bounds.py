@@ -203,6 +203,7 @@ def production_namespace():
         namespace,
         "switch.py",
         {
+            "_notify_manual_state_change",
             "_log_activity_for_light",
             "significant_change",
             "update_manually_controlled_from_untracked_change",
@@ -293,6 +294,7 @@ class ProtocolHarness:
             auto_reset_manual_control_timers={},
         )
         for name in (
+            "_notify_manual_state_change",
             "_log_activity_for_light",
             "significant_change",
             "update_manually_controlled_from_untracked_change",
