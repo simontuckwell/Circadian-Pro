@@ -251,6 +251,88 @@ class ManagerEventTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(h.calls), 1)
 
 
+class ActivityLoggingTests(unittest.TestCase):
+    """The Activity feed records state changes, not every adaptation interval."""
+
+    def setUp(self):
+        self.ns = namespace()
+        self.ns["EVENT_LOGBOOK_ENTRY"] = "logbook_entry"
+        self.ns["ATTR_DOMAIN"] = "domain"
+        self.ns["SWITCH_DOMAIN"] = "switch"
+        load_functions(self.ns, "switch.py", {"log_activity"}, "CircadianProSwitch")
+        load_functions(self.ns, "switch.py", {
+            "_log_activity_for_light", "get_manual_control_attributes",
+            "set_manual_control_attributes", "add_manual_control_attributes", "reset",
+        }, "CircadianProManager")
+        self.events = []
+        self.context = SimpleNamespace(id="hue-change", user_id=None)
+        state = SimpleNamespace(name="Simon's Study", state="on")
+        self.hass = SimpleNamespace(
+            is_running=True,
+            states=SimpleNamespace(get=lambda _: state),
+            bus=SimpleNamespace(async_fire=lambda event, data, **kwargs:
+                                self.events.append((event, data, kwargs.get("context")))),
+        )
+        self.switch = SimpleNamespace(
+            _name="Simon's Study", entity_id="switch.circadian_pro_simon_s_study",
+            lights=["light.study"], is_on=True, hass=self.hass,
+        )
+        self.switch.log_activity = MethodType(self.ns["log_activity"], self.switch)
+        self.manager = SimpleNamespace(
+            _disabled=False, hass=self.hass, switches=[self.switch],
+            manual_control={}, auto_reset_manual_control_times={},
+            auto_reset_manual_control_timers={},
+            our_last_state_on_change={}, last_service_data={},
+            last_service_context={}, last_service_acknowledgements={},
+            cancel_ongoing_adaptation_calls=lambda _: None,
+            _handle_timer=lambda *args: None,
+        )
+        for name in ("_log_activity_for_light", "get_manual_control_attributes",
+                     "set_manual_control_attributes", "add_manual_control_attributes", "reset"):
+            setattr(self.manager, name, MethodType(self.ns[name], self.manager))
+        self.flags = self.ns["LightControlAttributes"]
+
+    def test_first_override_and_clear_both_log_once_with_context(self):
+        self.manager.set_manual_control_attributes(
+            "light.study", self.flags.BRIGHTNESS, context=self.context,
+        )
+        self.manager.add_manual_control_attributes(
+            "light.study", self.flags.COLOR, context=self.context,
+        )
+        self.assertEqual(len(self.events), 1)
+        event, data, context = self.events[0]
+        self.assertEqual(event, "logbook_entry")
+        self.assertEqual(context, self.context)
+        self.assertEqual(data["entity_id"], self.switch.entity_id)
+        self.assertEqual(data["domain"], "switch")
+        self.assertIn("Manual override detected", data["message"])
+        self.manager.reset("light.study", reason="light_off", context=self.context)
+        self.manager.reset("light.study", reason="light_off", context=self.context)
+        self.assertEqual(len(self.events), 2)
+        self.assertIn("light switched off", self.events[1][1]["message"])
+        self.assertIs(self.events[1][2], self.context)
+
+    def test_internal_baseline_reset_does_not_clear_manual_flag_or_log(self):
+        self.manager.set_manual_control_attributes("light.study", self.flags.ALL)
+        self.events.clear()
+        self.manager.reset("light.study", reset_manual_control=False)
+        self.assertEqual(self.manager.manual_control["light.study"], self.flags.ALL)
+        self.assertEqual(self.events, [])
+
+    def test_resumed_by_user_and_timeout_have_distinct_reasons(self):
+        for reason, message in (("service", "resumed by user"), ("timeout", "automatic timeout")):
+            self.manager.set_manual_control_attributes("light.study", self.flags.ALL)
+            self.manager.reset("light.study", reason=reason)
+            self.assertIn(message, self.events[-1][1]["message"])
+        self.assertEqual(len(self.events), 4)
+
+    def test_no_activity_when_integration_is_shutting_down(self):
+        self.manager._disabled = True
+        self.manager.set_manual_control_attributes("light.study", self.flags.ALL)
+        self.manager.reset("light.study")
+        self.assertEqual(self.events, [])
+
+
 class TargetResolutionTests(unittest.TestCase):
     def test_combines_target_selectors_and_filters_non_light_entities(self):
         ns = namespace()
