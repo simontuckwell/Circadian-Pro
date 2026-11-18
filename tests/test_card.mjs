@@ -18,7 +18,7 @@ globalThis.customElements = {
   get: (key) => registry.get(key),
   define: (key, value) => registry.set(key, value),
 };
-const { profileStatus, curveGeometry, interpolatePoints, escapeHtml, CircadianProCard } =
+const { profileStatus, lightGroupStatus, curveGeometry, interpolatePoints, escapeHtml, CircadianProCard } =
   await import("data:text/javascript;base64," + Buffer.from(source).toString("base64"));
 for (const [name, value] of Object.entries(previous)) {
   if (value === undefined) delete globalThis[name];
@@ -27,6 +27,41 @@ for (const [name, value] of Object.entries(previous)) {
 
 const points = [[0, 10], [21600, 10], [43200, 50], [64800, 10], [86400, 10]];
 const curve = { day_start: 0, day_end: 86400, min_brightness: 10, max_brightness: 50, points };
+
+test("Hue group on/off state is independent of CP adaptation state", () => {
+  const hue = "light.study_group";
+  assert.equal(lightGroupStatus([hue], { [hue]: {state: "on"} }), "on");
+  assert.equal(lightGroupStatus([hue], { [hue]: {state: "off"} }), "off");
+  assert.equal(lightGroupStatus([hue], { [hue]: {state: "unavailable"} }), "unknown");
+  assert.equal(lightGroupStatus([], {}), "unknown");
+  assert.equal(lightGroupStatus(["light.one", "light.two"], {
+    "light.one": {state: "off"}, "light.two": {state: "on"},
+  }), "on");
+  assert.equal(lightGroupStatus(["light.one", "light.two"], {
+    "light.one": {state: "off"},
+  }), "unknown");
+
+  const card = new CircadianProCard();
+  const entity = "switch.circadian_pro_study";
+  card.setConfig({entity});
+  card._curve = {entity, light_entity_ids:[hue], day_start:0, day_end:86400, mode:"default"};
+  const profile = {state:"on",attributes:{manual_control:[]}};
+  const light = {state:"off"};
+  card.hass = {states:{[entity]:profile,[hue]:light}};
+  assert.match(card.shadowRoot.innerHTML, /class="icon dark"/);
+  assert.match(card.shadowRoot.innerHTML, /mdi:lightbulb-group-outline/);
+  light.state = "on";
+  profile.attributes.manual_control = [hue];
+  card.hass = {states:{[entity]:profile,[hue]:light}};
+  assert.match(card.shadowRoot.innerHTML, /class="icon lit"/);
+  assert.match(card.shadowRoot.innerHTML, /mdi:lightbulb-group"/);
+  assert.match(card.shadowRoot.innerHTML, /Manual/);
+  // Disabling CP itself does not mean the physical Hue room is dark.
+  profile.state = "off";
+  card.hass = {states:{[entity]:profile,[hue]:light}};
+  assert.match(card.shadowRoot.innerHTML, /class="icon lit"/);
+  assert.match(card.shadowRoot.innerHTML, /Paused/);
+});
 
 test("automatic, manual, paused and unavailable states are distinct", () => {
   assert.equal(profileStatus("on", { manual_control: [] }), "Automatic");
