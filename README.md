@@ -75,12 +75,21 @@ This fork includes a self-contained **Circadian Pro** dashboard card. It reads t
 current brightness and colour-temperature *targets* from a profile switch and
 plots the genuine Solar Elevation brightness curve supplied by the Python engine.
 It also displays **Automatic**, **Manual**, **Paused** or **Unavailable** and has
-a discreet toggle for pausing/resuming the profile. The group icon follows the
-**physical Hue room/light state**, independently of that control mode: softly
-illuminated gold when any configured group is on, muted when all are off, and
-neutral when the state is unknown or inaccessible. In Manual mode, **Resume
-automatic** releases the override using CP's existing service. Routine light
-changes are never sent directly from the card.
+a discreet toggle for pausing/resuming the profile. The **clickable group icon**
+controls the physical Hue room/light state, independently of that control mode:
+softly illuminated gold when any configured group is on, muted when all are off,
+and neutral (disabled) when the state is unknown or inaccessible. Click or tap
+the icon to turn the room off or on. For profiles targeting multiple light
+entities, the icon switches the whole selection together.
+
+The blue toggle still controls **only Circadian Pro adaptation**, never the
+physical lights. If adaptation is paused, the icon can turn the lights on
+without resuming adaptation; if adaptation is enabled, normal CP turn-on
+behaviour applies. In Manual mode, **Resume automatic** releases the override
+using CP's existing service. The icon uses HA's native `light.turn_on` and
+`light.turn_off` services, which enforce ordinary light-control permissions.
+During a light command, buttons are temporarily disabled to avoid conflicting
+actions.
 
 ### Add it in Home Assistant (no terminal required)
 
