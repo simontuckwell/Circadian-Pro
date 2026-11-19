@@ -69,6 +69,36 @@ Native switch names are translated using Home Assistant's **server language**, a
 - Interception of `light.turn_on` and `light.toggle`.
 - Home Assistant services for applying settings and managing manual control.
 
+## Colour output preference (Auto / Prefer CCT / Prefer RGB)
+
+Each profile now offers **Colour output mode**, alongside its minimum and
+maximum colour-temperature settings in **Circadian Pro → profile settings**.
+
+- **Auto (default)** preserves the existing selection logic: native CCT where
+  appropriate, calibrated RGB when the requested Kelvin is outside a device's
+  native range, and RGBW/RGBWW combinations on compatible devices.
+- **Prefer CCT** sends native colour-temperature commands whenever the light
+  advertises that mode. Kelvin values outside the supported range are clamped
+  to that device's endpoint rather than converted to red/orange RGB. Lights
+  without CCT capability use the available colour modes instead.
+- **Prefer RGB** sends calibrated RGB/XY colours where possible. For RGBW and
+  RGBWW devices it sets the white channels to zero rather than mixing them
+  with RGB, which can help balance rooms where some controllers are much
+  brighter in CCT mode. White-only lights continue using native CCT.
+
+This is a **per-profile preference** applied against the capabilities each
+light or native Hue room reports; it cannot guarantee identical brightness or
+colour across different types of lamp. Explicitly selected Sleep-mode colour
+settings take precedence. Existing profiles with the older `prefer_rgb_color`
+flag keep that RGB preference until the new selector is saved; otherwise
+existing profiles use Auto. The legacy `circadian_pro.apply` service's
+`prefer_rgb_color: true` remains an explicit RGB override.
+
+**Tip:** On mixed Hue/third-party rooms, first test Prefer RGB on one profile.
+Home Assistant may present a Hue room as a single light with both CCT and XY
+capability even when its individual members differ. CP follows the room
+entity's supported modes; a physical device may convert the requested colour.
+
 ## Solar dashboard card (experimental)
 
 This fork includes a self-contained **Circadian Pro** dashboard card. It reads the
