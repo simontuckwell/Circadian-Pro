@@ -157,7 +157,7 @@ test("concurrent icon clicks are suppressed and HA errors are shown", async () =
 
 test("card layouts use width-aware styling and content-determined height", () => {
   const card = new CircadianProCard();
-  assert.deepEqual(card.getGridOptions(), {columns: 9, min_columns: 6, rows: "auto"});
+  assert.deepEqual(card.getGridOptions(), {columns: "full", rows: "auto"});
   assert.ok(card.getCardSize() >= 7);
   assert.ok(source.includes("ha-card{container-type:inline-size"));
   assert.ok(source.includes("@container (max-width:315px)"));
