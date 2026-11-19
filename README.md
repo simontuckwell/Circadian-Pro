@@ -151,11 +151,11 @@ solar-brightness plot. When a profile is paused, the displayed targets are its
 **last calculated values**, not a measurement of the physical lights.
 
 On narrow screens the card sizes itself against its **own width**, rather
-than the phone's viewport. In a Sections dashboard, give it sufficient width
-for two readings side by side and set **Layout → Fit height to content** for
-existing cards. The custom card now recommends a wider default and
-`grid_options.rows: auto` for newly placed cards; HA may retain previously
-saved fixed layout settings until they are changed in the editor.
+than the phone's viewport. In a Sections dashboard, the card defaults to
+**Fit width** and **Fit height to content**, corresponding to
+`grid_options.columns: full` and `grid_options.rows: auto`.
+Home Assistant may retain previously saved layout settings on existing cards;
+change those in the editor if you want the new defaults to take effect.
 
 The graph is read-only and uses a permission-checked WebSocket command. The
 pause toggle uses `switch.turn_on` / `switch.turn_off`, and the manual Resume
