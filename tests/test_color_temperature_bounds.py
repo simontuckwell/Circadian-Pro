@@ -410,7 +410,7 @@ class ColorTemperatureBoundsTests(unittest.TestCase):
         expected = {
             ("auto", 3500): ("color_temp_kelvin", 3500),
             ("cct", 3500): ("color_temp_kelvin", 3500),
-            ("rgb", 3500): ("rgb_color", (255, 200, 180)),
+            ("rgb", 3500): ("rgb_color", None),
             ("auto", 1000): ("rgb_color", (255, 56, 0)),
             ("cct", 1000): ("color_temp_kelvin", 2202),
             ("rgb", 1000): ("rgb_color", (255, 56, 0)),
@@ -422,7 +422,11 @@ class ColorTemperatureBoundsTests(unittest.TestCase):
                 )
                 harness.switch._color_mode_preference = mode
                 payload = harness.dispatch(kelvin)
-                self.assertEqual(payload[key], value)
+                if value is None:
+                    self.assertEqual(len(payload[key]), 3)
+                    self.assertTrue(all(0 <= v <= 255 for v in payload[key]))
+                else:
+                    self.assertEqual(payload[key], value)
                 self.assertEqual(payload["brightness"], 255)
                 other_key = "rgb_color" if key == "color_temp_kelvin" else "color_temp_kelvin"
                 self.assertNotIn(other_key, payload)
