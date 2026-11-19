@@ -140,6 +140,7 @@ from .const import (
     CONF_MULTI_LIGHT_INTERCEPT,
     CONF_ONLY_ONCE,
     CONF_PREFER_RGB_COLOR,
+    CONF_COLOR_MODE_PREFERENCE,
     CONF_SEND_SPLIT_DELAY,
     CONF_SEPARATE_TURN_ON_COMMANDS,
     CONF_SKIP_REDUNDANT_COMMANDS,
@@ -641,6 +642,20 @@ def validate(
             if key not in (CONF_USE_DEFAULTS, ATTR_ENTITY_ID)
         }
         data.update(changed_settings)
+    # Preserve the historical RGB preference on profiles which have not yet
+    # been edited with the new three-way selector.
+    if config_entry is not None:
+        explicit_mode = (
+            CONF_COLOR_MODE_PREFERENCE in config_entry.options
+            or CONF_COLOR_MODE_PREFERENCE in config_entry.data
+        )
+    else:
+        explicit_mode = (
+            CONF_COLOR_MODE_PREFERENCE in (service_data or {})
+            or CONF_COLOR_MODE_PREFERENCE in (defaults or {})
+        )
+    if not explicit_mode and data.get(CONF_PREFER_RGB_COLOR) is True:
+        data[CONF_COLOR_MODE_PREFERENCE] = "rgb"
     data = {key: replace_none_str(value) for key, value in data.items()}
     for key, (validate_value, _) in EXTRA_VALIDATION.items():
         value = data.get(key)
@@ -1302,7 +1317,8 @@ class CircadianProSwitch(SwitchEntity, RestoreEntity):
         self.initial_transition = data[CONF_INITIAL_TRANSITION]
         self._sleep_transition = data[CONF_SLEEP_TRANSITION]
         self._only_once = data[CONF_ONLY_ONCE]
-        self._prefer_rgb_color = data[CONF_PREFER_RGB_COLOR]
+        self._prefer_rgb_color = data[CONF_PREFER_RGB_COLOR]  # legacy apply service
+        self._color_mode_preference = data[CONF_COLOR_MODE_PREFERENCE]
         # Circadian Pro: perfil fijo RGBW (auto-detect de CCT si la entidad soporta color_temp)
         self._cal_rgb_neutral: list[int] = [
             data[CONF_CAL_RGB_NEUTRAL_R],
@@ -1683,8 +1699,13 @@ class CircadianProSwitch(SwitchEntity, RestoreEntity):
             )
         if adapt_color is None:
             adapt_color = LightControlAttributes.COLOR in adaptation_attributes
-        if prefer_rgb_color is None:
-            prefer_rgb_color = self._prefer_rgb_color
+        # Legacy apply-service prefer_rgb_color=true is an explicit RGB
+        # request. Otherwise the saved three-way profile preference applies.
+        color_preference = (
+            "rgb" if prefer_rgb_color is True
+            else "auto" if prefer_rgb_color is False
+            else self._color_mode_preference
+        )
 
         if not adapt_color and not adapt_brightness:
             _LOGGER.debug(
@@ -1771,7 +1792,24 @@ class CircadianProSwitch(SwitchEntity, RestoreEntity):
                     white_w_kelvin=self._white_w_kelvin,
                 )
 
-                if ColorMode.RGBWW in supported_color_modes:
+                if color_preference == "cct" and "color_temp" in features:
+                    # White-only output, even if RGB/XY or RGBWW is also
+                    # supported. Values outside this lamp's CCT range clamp to
+                    # its nearest warm/cool endpoint rather than going red.
+                    service_data[ATTR_COLOR_TEMP_KELVIN] = _clamp_int(
+                        target_kelvin, min_kelvin, max_kelvin,
+                    )
+                elif color_preference == "rgb" and "color" in features:
+                    # Prefer the RGB channels even on genuine RGBW/RGBWW
+                    # devices, where sending mixed white channels would make
+                    # their output far brighter than RGB-only lamps nearby.
+                    if ColorMode.RGBWW in supported_color_modes:
+                        service_data[ATTR_RGBWW_COLOR] = (*cal_rgb, 0, 0)
+                    elif ColorMode.RGBW in supported_color_modes:
+                        service_data[ATTR_RGBW_COLOR] = (*cal_rgb, 0)
+                    else:
+                        service_data[ATTR_RGB_COLOR] = cal_rgb
+                elif ColorMode.RGBWW in supported_color_modes:
                     cold_kelvin = (
                         self._white_cw_kelvin
                         or state.attributes.get(ATTR_MAX_COLOR_TEMP_KELVIN)
@@ -1797,7 +1835,7 @@ class CircadianProSwitch(SwitchEntity, RestoreEntity):
                     # sending RGB instead can be reported back as COLOR_TEMP
                     # and falsely interpreted as a manual colour change.
                     or (
-                        not prefer_rgb_color
+                        color_preference != "rgb"
                         and min_kelvin - 10 <= target_kelvin <= max_kelvin + 10
                     )
                 ):
