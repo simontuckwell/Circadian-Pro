@@ -35,6 +35,8 @@ from .const import (  # pylint: disable=unused-import
     CONF_WHITE_W_KELVIN,
     DEFAULT_WHITE_W_KELVIN,
     CONF_LIGHTS,
+    CONF_COLOR_MODE_PREFERENCE,
+    CONF_PREFER_RGB_COLOR,
     CONF_ENTRY_TYPE,
     CONF_SLEEP_RGB_OR_COLOR_TEMP,
     CONF_SLEEP_ACTIVATION_MODE,
@@ -112,6 +114,16 @@ def validate_entry(config_entry: config_entries.ConfigEntry) -> dict[str, Any]:
     data.update(config_entry.options)
     data.update(config_entry.data)
     data = {key: replace_none_str(value) for key, value in data.items()}
+
+    # The old prefer_rgb_color flag was not shown by the current profile
+    # editor. Preserve its meaning for installed profiles until a new
+    # three-way preference is explicitly saved.
+    if (
+        CONF_COLOR_MODE_PREFERENCE not in config_entry.options
+        and CONF_COLOR_MODE_PREFERENCE not in config_entry.data
+        and data.get(CONF_PREFER_RGB_COLOR) is True
+    ):
+        data[CONF_COLOR_MODE_PREFERENCE] = "rgb"
 
     # Coerce / validate types for unserializable validators
     for key, (validate_value, _) in EXTRA_VALIDATION.items():
@@ -405,6 +417,7 @@ class OptionsFlowHandler(config_entries.OptionsFlowWithReload):
             "max_brightness",
             "min_color_temp",
             "max_color_temp",
+            "color_mode_preference",
             "only_once",
             "detect_non_ha_changes",
             "intercept",
