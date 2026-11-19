@@ -63,6 +63,98 @@ test("Hue group on/off state is independent of CP adaptation state", () => {
   assert.match(card.shadowRoot.innerHTML, /Paused/);
 });
 
+test("room icon toggles physical Hue group without toggling CP adaptation", async () => {
+  const card = new CircadianProCard();
+  const profile = "switch.circadian_pro_study";
+  const group = "light.study_group";
+  const calls = [];
+  card.setConfig({entity:profile, name:"Simon's Study"});
+  card._curve = {entity:profile, light_entity_ids:[group]};
+  const cp = {state:"on", attributes:{manual_control:[]}};
+  const light = {state:"on"};
+  card.hass = {
+    states:{[profile]:cp,[group]:light},
+    callService:async (...args)=>calls.push(args),
+  };
+  assert.match(card.shadowRoot.innerHTML, /<button type="button" class="icon lit"/);
+  assert.match(card.shadowRoot.innerHTML, /aria-label="Turn Simon&#39;s Study lights off"/);
+  await card._toggleLights();
+  assert.deepEqual(calls.pop(), ["light","turn_off",{entity_id:[group]}]);
+  assert.equal(cp.state,"on");
+
+  light.state="off";
+  cp.attributes.manual_control=[group];
+  card.hass={states:{[profile]:cp,[group]:light},callService:async (...args)=>calls.push(args)};
+  assert.match(card.shadowRoot.innerHTML, /<button type="button" class="icon dark"/);
+  assert.match(card.shadowRoot.innerHTML, /Manual/);
+  await card._toggleLights();
+  assert.deepEqual(calls.pop(), ["light","turn_on",{entity_id:[group]}]);
+  assert.deepEqual(cp.attributes.manual_control,[group]);
+
+  // The existing compact blue switch still affects only the CP profile.
+  await card._toggle();
+  assert.deepEqual(calls.pop(), ["switch","turn_off",{entity_id:profile}]);
+});
+
+test("icon controls multiple configured groups together, never inverts mixed states", async () => {
+  const card = new CircadianProCard();
+  const profile = "switch.circadian_pro_study";
+  const groupA = "light.group_a", groupB = "light.group_b";
+  const calls=[];
+  card.setConfig({entity:profile});
+  card._curve={entity:profile,light_entity_ids:[groupA,groupB]};
+  const states={
+    [profile]:{state:"off",attributes:{}},
+    [groupA]:{state:"on"},
+    [groupB]:{state:"off"},
+  };
+  card.hass={states,callService:async (...args)=>calls.push(args)};
+  await card._toggleLights();
+  assert.deepEqual(calls,[["light","turn_off",{entity_id:[groupA,groupB]}]]);
+  assert.equal(states[profile].state,"off");
+});
+
+test("unknown light status disables the icon and prevents an ungrounded command", async () => {
+  const card = new CircadianProCard();
+  const profile = "switch.circadian_pro_study";
+  const calls=[];
+  card.setConfig({entity:profile});
+  card._curve={entity:profile,light_entity_ids:["light.unavailable"]};
+  card.hass={states:{
+    [profile]:{state:"on",attributes:{}},
+    "light.unavailable":{state:"unavailable"},
+  },callService:async (...args)=>calls.push(args)};
+  assert.match(card.shadowRoot.innerHTML, /class="icon unknown"[^>]+ disabled/);
+  await card._toggleLights();
+  assert.deepEqual(calls,[]);
+});
+
+test("concurrent icon clicks are suppressed and HA errors are shown", async () => {
+  const card = new CircadianProCard();
+  const profile = "switch.circadian_pro_study", group = "light.study_group";
+  card.setConfig({entity:profile});
+  card._curve={entity:profile,light_entity_ids:[group]};
+  let rejectPending;
+  const calls=[];
+  card.hass={states:{
+    [profile]:{state:"on",attributes:{}},
+    [group]:{state:"on"},
+  },callService:(...args)=>{
+    calls.push(args);
+    return new Promise((_resolve,reject)=>{rejectPending=reject;});
+  }};
+  const first=card._toggleLights();
+  assert.equal(card._lightBusy,true);
+  assert.match(card.shadowRoot.innerHTML, /aria-busy="true"/);
+  assert.match(card.shadowRoot.innerHTML, /class="icon lit"[^>]+ disabled/);
+  await card._toggleLights();
+  assert.equal(calls.length,1);
+  rejectPending(new Error("Permission denied"));
+  await first;
+  assert.equal(card._lightBusy,false);
+  assert.match(card.shadowRoot.innerHTML,/Unable to change lights: Permission denied/);
+});
+
 test("card layouts use width-aware styling and content-determined height", () => {
   const card = new CircadianProCard();
   assert.deepEqual(card.getGridOptions(), {columns: 9, min_columns: 6, rows: "auto"});
