@@ -537,7 +537,9 @@ async def async_setup_entry(  # noqa: PLR0915
                         transition=data[CONF_TRANSITION],
                         adapt_brightness=data[ATTR_ADAPT_BRIGHTNESS],
                         adapt_color=data[ATTR_ADAPT_COLOR],
-                        prefer_rgb_color=data[CONF_PREFER_RGB_COLOR],
+                        prefer_rgb_color=(
+                            True if data[CONF_PREFER_RGB_COLOR] else None
+                        ),
                         force=True,
                     )
 
@@ -1751,11 +1753,18 @@ class CircadianProSwitch(SwitchEntity, RestoreEntity):
         # - En el resto de casos, calculamos RGB calibrado (dos puntos) + W según intensidad
         #   y con 'meseta' hasta el Kelvin real del canal W.
         if adapt_color:
+            # An explicit Sleep profile chooses its own colour representation.
+            # Other night-time blending should respect Prefer CCT.
+            if effective_sleep and not sleep_rgb:
+                color_preference = "cct"
             supported_color_modes = state.attributes.get(ATTR_SUPPORTED_COLOR_MODES, set())
             min_kelvin = state.attributes.get(ATTR_MIN_COLOR_TEMP_KELVIN) or 1000
             max_kelvin = state.attributes.get(ATTR_MAX_COLOR_TEMP_KELVIN) or 10000
 
-            force_rgb = bool(self._settings.get("force_rgb_color", False))
+            force_rgb = (
+                bool(self._settings.get("force_rgb_color", False))
+                and color_preference != "cct"
+            )
 
             if sleep_rgb or force_rgb:
                 # RGB puro en modo noche (o transición hacia él): W siempre a 0
