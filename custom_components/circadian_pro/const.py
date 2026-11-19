@@ -181,8 +181,16 @@ DOCS[CONF_ADAPT_ONLY_ON_BARE_TURN_ON] = (
 
 CONF_PREFER_RGB_COLOR, DEFAULT_PREFER_RGB_COLOR = "prefer_rgb_color", False
 DOCS[CONF_PREFER_RGB_COLOR] = (
-    "Whether to prefer RGB color adjustment over "
-    "light color temperature when possible. "
+    "Legacy preference for RGB over native CCT (superseded by color_mode_preference). "
+)
+CONF_COLOR_MODE_PREFERENCE, DEFAULT_COLOR_MODE_PREFERENCE = (
+    "color_mode_preference", "auto"
+)
+COLOR_MODE_PREFERENCES = ("auto", "cct", "rgb")
+DOCS[CONF_COLOR_MODE_PREFERENCE] = (
+    "Auto: original device-driven selection. Prefer CCT: use native white LEDs "
+    "when available, clamping to supported Kelvin limits. Prefer RGB: use "
+    "RGB/XY colours when available, falling back to native CCT otherwise. "
 )
 
 # --- Advanced color mixing for RGBW / RGBWW (RGBCCT) lights ---
@@ -577,6 +585,18 @@ VALIDATION_TUPLES: list[tuple[str, Any, Any]] = [
     (CONF_MIN_COLOR_TEMP, DEFAULT_MIN_COLOR_TEMP, int_between(1000, 10000)),
     (CONF_MAX_COLOR_TEMP, DEFAULT_MAX_COLOR_TEMP, int_between(1000, 10000)),
     (CONF_PREFER_RGB_COLOR, DEFAULT_PREFER_RGB_COLOR, bool),
+    (
+        CONF_COLOR_MODE_PREFERENCE,
+        DEFAULT_COLOR_MODE_PREFERENCE,
+        selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=list(COLOR_MODE_PREFERENCES),
+                translation_key=CONF_COLOR_MODE_PREFERENCE,
+                multiple=False,
+                mode=selector.SelectSelectorMode.DROPDOWN,
+            ),
+        ),
+    ),
     (CONF_SLEEP_BRIGHTNESS, DEFAULT_SLEEP_BRIGHTNESS, int_between(1, 100)),
     (
         CONF_SLEEP_RGB_OR_COLOR_TEMP,
