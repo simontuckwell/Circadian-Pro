@@ -89,7 +89,8 @@
           "transition_until_sleep": "Automatic sleep mode (legacy setting)",
           "sleep_schedule_enabled": "Use a sleep schedule (legacy setting)",
           "sunrise_offset": "Sunrise offset (s)",
-          "sunset_offset": "Sunset offset (s)"
+          "sunset_offset": "Sunset offset (s)",
+          "color_mode_preference": "Colour output mode"
         },
         "data_description": {
           "lights": "Lights controlled by this profile. You can leave the list empty.",
@@ -139,7 +140,8 @@
           "transition_until_sleep": "Compatibility setting for older profiles. Use “Automatic sleep mode activation” to choose how sleep mode starts.",
           "sleep_schedule_enabled": "Compatibility setting for older profiles. Use “By schedule” under “Automatic sleep mode activation” instead.",
           "sunrise_offset": "Shift sunrise by this many seconds. Positive values delay it; negative values bring it forward.",
-          "sunset_offset": "Shift sunset by this many seconds. Positive values delay it; negative values bring it forward."
+          "sunset_offset": "Shift sunset by this many seconds. Positive values delay it; negative values bring it forward.",
+          "color_mode_preference": "Auto follows the existing device-driven selection. Prefer CCT uses native warm/cool white LEDs within each light's supported Kelvin range. Prefer RGB selects colour channels to balance mixed RGB and CCT lamps; lights without that mode fall back to CCT. An explicit Sleep mode colour choice takes priority."
         }
       },
       "white_w_kelvin": {
@@ -267,6 +269,13 @@
       "options": {
         "pause_all": "Pause brightness and color",
         "pause_changed": "Pause only what changed"
+      }
+    },
+    "color_mode_preference": {
+      "options": {
+        "auto": "Auto",
+        "cct": "Prefer CCT",
+        "rgb": "Prefer RGB"
       }
     }
   },
@@ -474,6 +483,10 @@
         "autoreset_control_seconds": {
           "name": "Resume automatic control after (s)",
           "description": "Time before Circadian Pro resumes control after a manual change. Use 0 to disable automatic resumption."
+        },
+        "color_mode_preference": {
+          "name": "Colour output mode",
+          "description": "Auto follows the existing device-driven selection. Prefer CCT uses native warm/cool white LEDs within each light's supported Kelvin range. Prefer RGB selects colour channels to balance mixed RGB and CCT lamps; lights without that mode fall back to CCT. An explicit Sleep mode colour choice takes priority."
         }
       }
     }
