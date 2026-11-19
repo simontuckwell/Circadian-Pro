@@ -89,7 +89,8 @@
           "transition_until_sleep": "Modo noche automático (ajuste anterior)",
           "sleep_schedule_enabled": "Usar una franja de modo noche (ajuste anterior)",
           "sunrise_offset": "Desplazamiento del amanecer (s)",
-          "sunset_offset": "Desplazamiento del atardecer (s)"
+          "sunset_offset": "Desplazamiento del atardecer (s)",
+          "color_mode_preference": "Modo de salida de color"
         },
         "data_description": {
           "lights": "Luces que controlará este perfil. Puedes dejar la lista vacía.",
@@ -139,7 +140,8 @@
           "transition_until_sleep": "Ajuste de compatibilidad con perfiles antiguos. Usa «Activación automática del modo noche» para elegir cómo se activa.",
           "sleep_schedule_enabled": "Ajuste de compatibilidad con perfiles antiguos. Usa «Por franja horaria» en «Activación automática del modo noche».",
           "sunrise_offset": "Desplaza el amanecer estos segundos. Los valores positivos lo retrasan y los negativos lo adelantan.",
-          "sunset_offset": "Desplaza el atardecer estos segundos. Los valores positivos lo retrasan y los negativos lo adelantan."
+          "sunset_offset": "Desplaza el atardecer estos segundos. Los valores positivos lo retrasan y los negativos lo adelantan.",
+          "color_mode_preference": "Auto mantiene la selección actual según el dispositivo. Preferir CCT utiliza los LED blancos dentro del rango Kelvin admitido. Preferir RGB utiliza los canales de color para equilibrar lámparas RGB y CCT; los dispositivos sin ese modo usan CCT. La elección explícita del modo sueño tiene prioridad."
         }
       },
       "white_w_kelvin": {
@@ -267,6 +269,13 @@
       "options": {
         "pause_all": "Pausar brillo y color",
         "pause_changed": "Pausar solo lo modificado"
+      }
+    },
+    "color_mode_preference": {
+      "options": {
+        "auto": "Automático",
+        "cct": "Preferir CCT",
+        "rgb": "Preferir RGB"
       }
     }
   },
@@ -474,6 +483,10 @@
         "autoreset_control_seconds": {
           "name": "Reanudar el control automático tras (s)",
           "description": "Tiempo para devolver el control a Circadian Pro tras un ajuste manual. Usa 0 para desactivar la recuperación automática."
+        },
+        "color_mode_preference": {
+          "name": "Modo de salida de color",
+          "description": "Auto mantiene la selección actual según el dispositivo. Preferir CCT utiliza los LED blancos dentro del rango Kelvin admitido. Preferir RGB utiliza los canales de color para equilibrar lámparas RGB y CCT; los dispositivos sin ese modo usan CCT. La elección explícita del modo sueño tiene prioridad."
         }
       }
     }
