@@ -7,7 +7,8 @@ const CSS = [
 "ha-card{container-type:inline-size;overflow:hidden;border-radius:19px;box-shadow:var(--ha-card-box-shadow,0 2px 10px #0001)}",
 ".main{padding:20px 21px 16px}.head,.identity,.actions,.numbers,.bottom,.mode{display:flex;align-items:center}",
 ".head,.bottom{justify-content:space-between;gap:10px}.identity{gap:11px;min-width:0}",
-".icon{display:grid;place-items:center;width:37px;height:37px;border-radius:12px;background:color-mix(in srgb,var(--primary-color,#2796bd) 10%,transparent);color:var(--primary-color,#2796bd);flex-shrink:0;transition:background .2s,color .2s,box-shadow .2s}",
+".icon{display:grid;place-items:center;width:40px;height:40px;border:0;padding:0;appearance:none;cursor:pointer;font:inherit;border-radius:12px;background:color-mix(in srgb,var(--primary-color,#2796bd) 10%,transparent);color:var(--primary-color,#2796bd);flex-shrink:0;transition:background .2s,color .2s,box-shadow .2s}",
+".icon:disabled{cursor:default}.icon[aria-busy='true']{opacity:.55}.icon:focus-visible{outline:2px solid var(--primary-color,#259cbc);outline-offset:3px}",
 ".icon.lit{background:rgba(251,188,66,.20);color:#c28a25;box-shadow:inset 0 0 0 1px rgba(223,153,34,.16),0 0 10px rgba(244,176,54,.14)}",
 ".icon.lit ha-icon{filter:drop-shadow(0 0 2px rgba(238,169,43,.48))}",
 ".icon.dark{background:var(--secondary-background-color,#8882);color:var(--secondary-text-color);opacity:.75}",
@@ -107,7 +108,7 @@ function profileName(state,config) {
 export class CircadianProCard extends HTMLElement {
  constructor() {
   super();this.attachShadow({mode:"open"});this._curve=null;this._pending=null;
-  this._offset=0;this._retryAfter=0;this._busy=false;this._error="";
+  this._offset=0;this._retryAfter=0;this._busy=false;this._lightBusy=false;this._error="";
  }
  setConfig(config) {
   if(typeof config?.entity!=="string" || !config.entity.startsWith("switch."))
@@ -158,6 +159,28 @@ export class CircadianProCard extends HTMLElement {
   catch(err){this._error="Unable to change adaptation: "+(err.message||"unknown error");}
   finally{this._busy=false;this._render();}
  }
+ async _toggleLights(){
+  // Light power is independent of CP's adaptation switch. The API returns
+  // only readable configured light entities; HA enforces control permissions
+  // again when the real light service is called.
+  const entity=this._config?.entity;
+  const curve=this._curve?.entity===entity?this._curve:null;
+  const ids=curve?.light_entity_ids;
+  const current=lightGroupStatus(ids,this._hass?.states);
+  if(this._lightBusy || !["on","off"].includes(current) ||
+     !Array.isArray(ids) || !ids.length || !this._hass?.callService)return;
+  this._lightBusy=true;this._error="";this._render();
+  try{
+   // Explicit turn_on/turn_off handles profiles with multiple targets
+   // predictably, unlike light.toggle which would invert mixed groups.
+   await this._hass.callService("light",current==="on"?"turn_off":"turn_on",
+    {entity_id:[...ids]});
+  }catch(err){
+   this._error="Unable to change lights: "+(err.message||"unknown error");
+  }finally{
+   this._lightBusy=false;this._render();
+  }
+ }
  async _resume(){
   const entity=this._config?.entity,state=this._hass?.states?.[entity];
   if(this._busy || profileStatus(state?.state,state?.attributes)!=="Manual")return;
@@ -198,8 +221,9 @@ export class CircadianProCard extends HTMLElement {
   if(on && Number.isFinite(brightness) && Number.isFinite(kelvin))this._last={brightness,kelvin};
   const curve=this._curve?.entity===entity?this._curve:null;
   const lightState=lightGroupStatus(curve?.light_entity_ids,this._hass?.states);
-  const lightLabel=lightState==="on"?"Lights on":lightState==="off"?"Lights off":"Light status unavailable";
   const name=escapeHtml(profileName(state,this._config));
+  const lightLabel=lightState==="on"?"Turn "+name+" lights off":
+   lightState==="off"?"Turn "+name+" lights on":"Light status unavailable";
   const icon=escapeHtml(this._config.icon||
     (lightState==="on"?"mdi:lightbulb-group":"mdi:lightbulb-group-outline"));
   const brightnessText=Number.isFinite(brightness)?Math.round(brightness):"—";
@@ -210,8 +234,12 @@ export class CircadianProCard extends HTMLElement {
   const now=this._now();
   this.shadowRoot.innerHTML=
    '<style>'+CSS+'</style><ha-card><div class="main">'+
-    '<div class="head"><div class="identity"><div class="icon '+(lightState==="on"?"lit":lightState==="off"?"dark":"unknown")+
-      '" role="img" aria-label="'+lightLabel+'" title="'+lightLabel+'"><ha-icon icon="'+icon+'"></ha-icon></div>'+
+    '<div class="head"><div class="identity"><button type="button" class="icon '+(lightState==="on"?"lit":lightState==="off"?"dark":"unknown")+
+      '" aria-label="'+lightLabel+'" title="'+lightLabel+'"'+
+      (lightState==="unknown" || this._lightBusy?' disabled':'')+
+      ' aria-busy="'+this._lightBusy+'"'+
+      (lightState==="unknown"?'':' aria-pressed="'+(lightState==="on")+'"')+
+      '><ha-icon icon="'+icon+'"></ha-icon></button>'+
      '<div style="min-width:0"><div class="name">'+name+'</div><div class="subname">Circadian Pro</div></div></div>'+
      '<div class="actions"><span class="pill '+status.toLowerCase()+'">'+status+'</span>'+
      '<button class="toggle" type="button" role="switch" aria-checked="'+on+'" aria-label="'+(on?"Pause":"Resume")+' circadian adaptation" title="'+(on?"Pause":"Resume")+' adaptation"'+
@@ -228,6 +256,7 @@ export class CircadianProCard extends HTMLElement {
      (status==="Manual"?'<button class="resume" type="button"'+(this._busy?' disabled':'')+'>Resume automatic</button>':"")+'</div>'+
     (this._error?'<div class="error" role="alert">'+escapeHtml(this._error)+'</div>':"")+
    '</div></ha-card>';
+  this.shadowRoot.querySelector(".icon")?.addEventListener("click",()=>this._toggleLights());
   this.shadowRoot.querySelector(".toggle")?.addEventListener("click",()=>this._toggle());
   this.shadowRoot.querySelector(".resume")?.addEventListener("click",()=>this._resume());
  }
