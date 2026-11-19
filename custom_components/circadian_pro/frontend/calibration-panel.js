@@ -12,6 +12,7 @@ const BRIGHTNESS_FIELDS = new Set(["min_brightness", "max_brightness", "sleep_br
 const GENERAL_GROUPS = [
   { id: "adaptation", rows: [["interval", "adapt_delay"], ["transition", "initial_transition"], ["only_once"]] },
   { id: "limits", rows: [["min_brightness", "max_brightness"], ["min_color_temp", "max_color_temp"],
+    ["color_mode_preference"],
     ["brightness_mode", "apply_temperature_curve"], ["brightness_mode_time_light_minutes", "brightness_mode_time_dark_minutes"]] },
   { id: "night", rows: [["sleep_activation_mode"], ["sleep_schedule_start", "sleep_schedule_end"],
     ["sleep_brightness", "sleep_transition"], ["sleep_rgb_or_color_temp", "sleep_color_temp", "sleep_rgb_color"]] },
