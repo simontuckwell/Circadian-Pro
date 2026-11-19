@@ -314,6 +314,7 @@ class ProtocolHarness:
             entity_id="switch.circadian_pro_example_a",
             _transition=0,
             _prefer_rgb_color=False,
+            _color_mode_preference="auto",
             _send_split_delay=0,
             _separate_turn_on_commands=False,
             _skip_redundant_commands=False,
@@ -402,6 +403,79 @@ class ColorTemperatureBoundsTests(unittest.TestCase):
                 self.assertEqual(
                     harness.manager.last_service_data[harness.light], payload
                 )
+
+    def test_colour_mode_policies_on_mixed_ct_and_xy_group(self):
+        # The same Hue room can expose native CCT and XY. Policies must
+        # differ even at identical brightness and target Kelvin values.
+        expected = {
+            ("auto", 3500): ("color_temp_kelvin", 3500),
+            ("cct", 3500): ("color_temp_kelvin", 3500),
+            ("rgb", 3500): ("rgb_color", (255, 200, 180)),
+            ("auto", 1000): ("rgb_color", (255, 56, 0)),
+            ("cct", 1000): ("color_temp_kelvin", 2202),
+            ("rgb", 1000): ("rgb_color", (255, 56, 0)),
+        }
+        for (mode, kelvin), (key, value) in expected.items():
+            with self.subTest(mode=mode, kelvin=kelvin):
+                harness = ProtocolHarness(
+                    modes=("color_temp", "xy"), bounds=(2202, 6535)
+                )
+                harness.switch._color_mode_preference = mode
+                payload = harness.dispatch(kelvin)
+                self.assertEqual(payload[key], value)
+                self.assertEqual(payload["brightness"], 255)
+                other_key = "rgb_color" if key == "color_temp_kelvin" else "color_temp_kelvin"
+                self.assertNotIn(other_key, payload)
+
+    def test_rgb_preference_falls_back_to_cct_on_white_only_lamp(self):
+        harness = ProtocolHarness(modes=("color_temp",), bounds=(2202, 6535))
+        harness.switch._color_mode_preference = "rgb"
+        payload = harness.dispatch(1000)
+        self.assertEqual(payload["color_temp_kelvin"], 2202)
+        self.assertNotIn("rgb_color", payload)
+
+    def test_sleep_colour_choice_overrides_regular_preference(self):
+        harness = ProtocolHarness(modes=("color_temp", "xy"))
+        harness.switch._color_mode_preference = "cct"
+        payload = harness.dispatch(3500, sleep=True, rgb=(60, 40, 20))
+        self.assertEqual(payload["rgb_color"], (60, 40, 20))
+        self.assertNotIn("color_temp_kelvin", payload)
+
+        harness = ProtocolHarness(modes=("color_temp", "xy"))
+        harness.switch._color_mode_preference = "rgb"
+        # An explicitly configured CT sleep mode remains CCT.
+        harness.switch._effective_sleep_state = lambda: True
+        harness.switch._sun_light_settings = SimpleNamespace(
+            sleep_rgb_or_color_temp="color_temp",
+            get_settings=lambda *args: {
+                "brightness_pct": 100, "color_temp_kelvin": 2100,
+                "force_rgb_color": False, "rgb_color": (255, 56, 0),
+            },
+        )
+        data = complete_immediate(
+            harness.ns["prepare_switch_adaptation_data"](
+                harness.switch, harness.light, force=True,
+            )
+        )
+        complete_immediate(
+            harness.ns["_execute_adaptation_calls"](harness.switch, data)
+        )
+        self.assertEqual(harness.calls[-1][2]["color_temp_kelvin"], 2202)
+
+    def test_existing_profile_auto_and_explicit_legacy_rgb_override(self):
+        harness = ProtocolHarness(modes=("color_temp", "xy"))
+        self.assertEqual(harness.dispatch(3500)["color_temp_kelvin"], 3500)
+        harness = ProtocolHarness(modes=("color_temp", "xy"))
+        harness.switch._color_mode_preference = "cct"
+        data = complete_immediate(
+            harness.ns["prepare_switch_adaptation_data"](
+                harness.switch, harness.light, force=True, prefer_rgb_color=True,
+            )
+        )
+        complete_immediate(
+            harness.ns["_execute_adaptation_calls"](harness.switch, data)
+        )
+        self.assertIn("rgb_color", harness.calls[-1][2])
 
     def test_hue_group_rounding_at_warm_endpoint_uses_native_ct(self):
         # Real Hue room: CT and XY are advertised even though its Being lamps
@@ -588,6 +662,36 @@ class HueRGBToXYTests(unittest.TestCase):
             harness.detect_manual_change(),
             harness.ns["LightControlAttributes"].COLOR,
         )
+
+
+class ColourPolicyNativeChannelTests(unittest.TestCase):
+    def test_rgbww_choice_disables_white_channels_only_when_preferred(self):
+        for mode in ("auto", "rgb", "cct"):
+            with self.subTest(mode=mode):
+                harness = ProtocolHarness(modes=("rgbww", "color_temp"))
+                harness.switch._color_mode_preference = mode
+                payload = harness.dispatch(3500)
+                if mode == "cct":
+                    self.assertEqual(payload["color_temp_kelvin"], 3500)
+                    self.assertNotIn("rgbww_color", payload)
+                else:
+                    self.assertIn("rgbww_color", payload)
+                    if mode == "rgb":
+                        self.assertEqual(payload["rgbww_color"][3:], (0, 0))
+                    else:
+                        self.assertGreater(sum(payload["rgbww_color"][3:]), 0)
+
+    def test_rgbw_without_cct_falls_back_to_rgbw_in_cct_preference(self):
+        harness = ProtocolHarness(modes=("rgbw",))
+        harness.switch._color_mode_preference = "cct"
+        payload = harness.dispatch(3500)
+        self.assertIn("rgbw_color", payload)
+        self.assertGreater(payload["rgbw_color"][3], 0)
+
+        harness = ProtocolHarness(modes=("rgbw",))
+        harness.switch._color_mode_preference = "rgb"
+        payload = harness.dispatch(3500)
+        self.assertEqual(payload["rgbw_color"][3], 0)
 
 
 class RGBWWProtocolTests(unittest.TestCase):
