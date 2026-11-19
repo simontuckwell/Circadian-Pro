@@ -153,7 +153,8 @@ class AdaptationSafetyTests(unittest.TestCase):
         payload = h.dispatch(4000)
         self.assertEqual(payload.get("color_temp_kelvin"), 4000)
         self.assertNotIn("rgb_color", payload)
-        h.switch._prefer_rgb_color = True
+        # The newer per-profile selector supersedes the legacy boolean.
+        h.switch._color_mode_preference = "rgb"
         payload = h.dispatch(4000)
         self.assertIn("rgb_color", payload)
         self.assertNotIn("color_temp_kelvin", payload)
