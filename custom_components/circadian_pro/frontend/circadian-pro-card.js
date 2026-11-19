@@ -153,7 +153,7 @@ export class CircadianProCard extends HTMLElement {
  }
  async _toggle(){
   const entity=this._config?.entity,state=this._hass?.states?.[entity];
-  if(this._busy || !["on","off"].includes(state?.state))return;
+  if(this._busy || this._lightBusy || !["on","off"].includes(state?.state))return;
   this._busy=true;this._error="";this._render();
   try{await this._hass.callService("switch",state.state==="on"?"turn_off":"turn_on",{entity_id:entity});}
   catch(err){this._error="Unable to change adaptation: "+(err.message||"unknown error");}
@@ -167,7 +167,7 @@ export class CircadianProCard extends HTMLElement {
   const curve=this._curve?.entity===entity?this._curve:null;
   const ids=curve?.light_entity_ids;
   const current=lightGroupStatus(ids,this._hass?.states);
-  if(this._lightBusy || !["on","off"].includes(current) ||
+  if(this._busy || this._lightBusy || !["on","off"].includes(current) ||
      !Array.isArray(ids) || !ids.length || !this._hass?.callService)return;
   this._lightBusy=true;this._error="";this._render();
   try{
@@ -183,7 +183,7 @@ export class CircadianProCard extends HTMLElement {
  }
  async _resume(){
   const entity=this._config?.entity,state=this._hass?.states?.[entity];
-  if(this._busy || profileStatus(state?.state,state?.attributes)!=="Manual")return;
+  if(this._busy || this._lightBusy || profileStatus(state?.state,state?.attributes)!=="Manual")return;
   this._busy=true;this._error="";this._render();
   try{await this._hass.callService("circadian_pro","set_manual_control",{entity_id:entity,manual_control:"false"});}
   catch(err){this._error="Unable to resume automatic control: "+(err.message||"unknown error");}
@@ -236,14 +236,14 @@ export class CircadianProCard extends HTMLElement {
    '<style>'+CSS+'</style><ha-card><div class="main">'+
     '<div class="head"><div class="identity"><button type="button" class="icon '+(lightState==="on"?"lit":lightState==="off"?"dark":"unknown")+
       '" aria-label="'+lightLabel+'" title="'+lightLabel+'"'+
-      (lightState==="unknown" || this._lightBusy?' disabled':'')+
+      (lightState==="unknown" || this._lightBusy || this._busy?' disabled':'')+
       ' aria-busy="'+this._lightBusy+'"'+
       (lightState==="unknown"?'':' aria-pressed="'+(lightState==="on")+'"')+
       '><ha-icon icon="'+icon+'"></ha-icon></button>'+
      '<div style="min-width:0"><div class="name">'+name+'</div><div class="subname">Circadian Pro</div></div></div>'+
      '<div class="actions"><span class="pill '+status.toLowerCase()+'">'+status+'</span>'+
      '<button class="toggle" type="button" role="switch" aria-checked="'+on+'" aria-label="'+(on?"Pause":"Resume")+' circadian adaptation" title="'+(on?"Pause":"Resume")+' adaptation"'+
-      (!["on","off"].includes(state?.state)||this._busy?' disabled':'')+'><span class="knob"></span></button></div></div>'+
+      (!["on","off"].includes(state?.state)||this._busy||this._lightBusy?' disabled':'')+'><span class="knob"></span></button></div></div>'+
     '<div class="numbers"><div class="metric"><div class="metric-label">Target brightness</div><div class="metric-value">'+
      brightnessText+'<span class="unit">'+(Number.isFinite(brightness)?"%":"")+'</span></div></div>'+
      '<div class="metric"><div class="metric-label">Target colour</div><div class="metric-value">'+
@@ -253,7 +253,7 @@ export class CircadianProCard extends HTMLElement {
      '<span class="curve-now">'+(curve?"Now · "+clock(now,curve.timezone):"")+'</span></div>'+
       this._chart(curve,now)+'</div><hr class="divider"/>'+
     '<div class="bottom"><span class="mode"><ha-icon icon="mdi:weather-sunny"></ha-icon>'+escapeHtml(footer)+'</span>'+
-     (status==="Manual"?'<button class="resume" type="button"'+(this._busy?' disabled':'')+'>Resume automatic</button>':"")+'</div>'+
+     (status==="Manual"?'<button class="resume" type="button"'+(this._busy||this._lightBusy?' disabled':'')+'>Resume automatic</button>':"")+'</div>'+
     (this._error?'<div class="error" role="alert">'+escapeHtml(this._error)+'</div>':"")+
    '</div></ha-card>';
   this.shadowRoot.querySelector(".icon")?.addEventListener("click",()=>this._toggleLights());
