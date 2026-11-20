@@ -60,7 +60,8 @@ Native switch names are translated using Home Assistant's **server language**, a
 - Manual and automatic sleep mode.
 - Sunrise and sunset offsets in minutes in the settings UI. Existing values convert automatically: 3600 seconds appears as 60 minutes. YAML and service values keep their existing seconds-based format.
 - Fixed or limited sunrise and sunset times.
-- Manual-control detection with optional automatic reset.
+- Manual-control detection with optional automatic reset. Brightness changes use a small 0–255 rounding allowance at low levels (about one percentage point), increasing to 2% of the requested value at high levels; deliberate dimming such as 10% → 1% remains manual.
+- Periodic detection of untracked changes waits for each commanded device transition plus a two-second Hue reporting margin, including commands that produce no fresh state event. Explicit Home Assistant light-service adjustments can still take manual control immediately; this guard is not a blanket event-discard window.
 - **Activity logging (experimental):** record when a room enters or leaves manual control, including the reason when known, plus deliberate profile pause/resume and Sleep mode changes. Entries are associated with the profile's main switch in Home Assistant Activity. Routine adaptation intervals are deliberately omitted. The existing `circadian_pro.manual_control` event remains available for automations.
 - **Hue group colour-mode normalisation:** Hue rooms that only expose native XY can report CP's requested RGB colours back as XY. Near-identical RGB-to-XY round trips are not treated as manual overrides; noticeably different colours and other colour-mode changes still trigger manual control.
 - RGB, RGBW, RGB+CCT (`rgbww`) and color-temperature light support.
