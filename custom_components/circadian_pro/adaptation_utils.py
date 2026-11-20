@@ -212,6 +212,10 @@ class AdaptationData:
     max_length: int
     attributes: LightControlAttributes
     initial_sleep: bool = False
+    # Unfiltered target, used to remember attributes already at their targets.
+    # Without this, a fully redundant initial adaptation leaves no baseline for
+    # detecting subsequent out-of-band (e.g. Hue app) manual changes.
+    target_service_data: ServiceData | None = None
 
     async def next_service_call_data(self) -> ServiceData | None:
         """Return data for the next service call, or none if no more data exists."""
@@ -300,6 +304,7 @@ def prepare_adaptation_data(
         force=force,
         max_length=service_datas_length,
         attributes=attributes,
+        target_service_data=dict(service_data),
     )
 
 

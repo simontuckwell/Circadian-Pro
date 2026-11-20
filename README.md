@@ -53,18 +53,115 @@ Native switch names are translated using Home Assistant's **server language**, a
 
 - Automatic brightness and color-temperature adaptation.
 - Multiple independent Circadian Pro instances.
-- Natural, Linear and Sigmoid brightness modes, with optional shared color-temperature timing in Linear and Sigmoid.
+- Natural, Linear, Sigmoid and **Solar Elevation** brightness modes, with optional shared color-temperature timing in Linear and Sigmoid.
+- Solar Elevation follows actual astronomical solar height: minimum at night and the horizon, maximum at solar noon, and a smooth rise and fall in between. It uses the same daylight normalisation as the original Circadian Lighting project (including its −0.833° reference), with the chosen profile brightness limits. It deliberately ignores configured sunrise/sunset offsets and transition windows; colour temperature remains on its independent curve.
 - Transition windows with synchronized sliders and editable whole numbers from 0 to 240 minutes. Both windows can be zero for a step in the target at sunrise and sunset. Existing values are preserved exactly; YAML and service durations retain their seconds-based format.
 - One interactive curve showing how the selected mode and the two windows affect the transition around sunrise and sunset. Natural hides the two unused windows and shows its own curve.
 - Manual and automatic sleep mode.
 - Sunrise and sunset offsets in minutes in the settings UI. Existing values convert automatically: 3600 seconds appears as 60 minutes. YAML and service values keep their existing seconds-based format.
 - Fixed or limited sunrise and sunset times.
-- Manual-control detection with optional automatic reset.
+- Manual-control detection with optional automatic reset. Brightness changes use a small 0–255 rounding allowance at low levels (about one percentage point), increasing to 2% of the requested value at high levels; deliberate dimming such as 10% → 1% remains manual.
+- Periodic detection of untracked changes waits for each commanded device transition plus a two-second Hue reporting margin, including commands that produce no fresh state event. Explicit Home Assistant light-service adjustments can still take manual control immediately; this guard is not a blanket event-discard window.
+- **Activity logging (experimental):** record when a room enters or leaves manual control, including the reason when known, plus deliberate profile pause/resume and Sleep mode changes. Entries are associated with the profile's main switch in Home Assistant Activity. Routine adaptation intervals are deliberately omitted. The existing `circadian_pro.manual_control` event remains available for automations.
+- **Hue group colour-mode normalisation:** Hue rooms that only expose native XY can report CP's requested RGB colours back as XY. Near-identical RGB-to-XY round trips are not treated as manual overrides; noticeably different colours and other colour-mode changes still trigger manual control.
 - RGB, RGBW, RGB+CCT (`rgbww`) and color-temperature light support.
 - Custom RGBW and RGB+CCT calibration at 4000 K and 1000 K.
 - Configurable adaptation intervals and transitions.
 - Interception of `light.turn_on` and `light.toggle`.
 - Home Assistant services for applying settings and managing manual control.
+
+## Colour output preference (Auto / Prefer CCT / Prefer RGB)
+
+Each profile now offers **Colour output mode**, alongside its minimum and
+maximum colour-temperature settings in **Circadian Pro → profile settings**.
+
+- **Auto (default)** preserves the existing selection logic: native CCT where
+  appropriate, calibrated RGB when the requested Kelvin is outside a device's
+  native range, and RGBW/RGBWW combinations on compatible devices.
+- **Prefer CCT** sends native colour-temperature commands whenever the light
+  advertises that mode. Kelvin values outside the supported range are clamped
+  to that device's endpoint rather than converted to red/orange RGB. Lights
+  without CCT capability use the available colour modes instead.
+- **Prefer RGB** sends calibrated RGB/XY colours where possible. For RGBW and
+  RGBWW devices it sets the white channels to zero rather than mixing them
+  with RGB, which can help balance rooms where some controllers are much
+  brighter in CCT mode. White-only lights continue using native CCT.
+
+This is a **per-profile preference** applied against the capabilities each
+light or native Hue room reports; it cannot guarantee identical brightness or
+colour across different types of lamp. Explicitly selected Sleep-mode colour
+settings take precedence. Existing profiles with the older `prefer_rgb_color`
+flag keep that RGB preference until the new selector is saved; otherwise
+existing profiles use Auto. The legacy `circadian_pro.apply` service's
+`prefer_rgb_color: true` remains an explicit RGB override.
+
+**Tip:** On mixed Hue/third-party rooms, first test Prefer RGB on one profile.
+Home Assistant may present a Hue room as a single light with both CCT and XY
+capability even when its individual members differ. CP follows the room
+entity's supported modes; a physical device may convert the requested colour.
+
+## Solar dashboard card (experimental)
+
+This fork includes a self-contained **Circadian Pro** dashboard card. It reads the
+current brightness and colour-temperature *targets* from a profile switch and
+plots the genuine Solar Elevation brightness curve supplied by the Python engine.
+It also displays **Automatic**, **Manual**, **Paused** or **Unavailable** and has
+a discreet toggle for pausing/resuming the profile. The **clickable group icon**
+controls the physical Hue room/light state, independently of that control mode:
+softly illuminated gold when any configured group is on, muted when all are off,
+and neutral (disabled) when the state is unknown or inaccessible. Click or tap
+the icon to turn the room off or on. For profiles targeting multiple light
+entities, the icon switches the whole selection together.
+
+The blue toggle still controls **only Circadian Pro adaptation**, never the
+physical lights. If adaptation is paused, the icon can turn the lights on
+without resuming adaptation; if adaptation is enabled, normal CP turn-on
+behaviour applies. In Manual mode, **Resume automatic** releases the override
+using CP's existing service. The icon uses HA's native `light.turn_on` and
+`light.turn_off` services, which enforce ordinary light-control permissions.
+During a light command, buttons are temporarily disabled to avoid conflicting
+actions.
+
+### Add it in Home Assistant (no terminal required)
+
+1. Update the Circadian Pro fork through **Settings → Marketplace** and **restart
+   Home Assistant**. The Marketplace integration update does not necessarily
+   prompt you to restart.
+2. Open **Settings → Dashboards → ⋮ → Resources**. Add a **JavaScript module**
+   resource with URL `/circadian_pro_static/circadian-pro-card.js`. This uses the
+   file served by the existing CP integration; do not download or copy JavaScript.
+3. Edit your dashboard, **Add card**, select **Circadian Pro**, then select the
+   main switch for the profile (not the associated Sleep or Adapt switches).
+   The card also supports a Manual card configuration:
+
+   ```yaml
+   type: custom:circadian-pro-card
+   entity: switch.circadian_pro_simon_s_study
+   name: Simon's Study
+   icon: mdi:desk
+   ```
+
+4. Reload the dashboard if the card does not appear immediately. On subsequent
+   integration updates, restart HA and fully reload the browser page.
+
+The solar curve uses HA's configured location and timezone, including daylight
+saving transitions. Its marker is based on the server's time, not the browser's
+clock. The curve is available for **Solar Elevation** profiles; other brightness
+modes continue to show their live targets and controls, without a misleading
+solar-brightness plot. When a profile is paused, the displayed targets are its
+**last calculated values**, not a measurement of the physical lights.
+
+On narrow screens the card sizes itself against its **own width**, rather
+than the phone's viewport. In a Sections dashboard, the card defaults to
+**Fit width** and **Fit height to content**, corresponding to
+`grid_options.columns: full` and `grid_options.rows: auto`.
+Home Assistant may retain previously saved layout settings on existing cards;
+change those in the editor if you want the new defaults to take effect.
+
+The graph is read-only and uses a permission-checked WebSocket command. The
+pause toggle uses `switch.turn_on` / `switch.turn_off`, and the manual Resume
+action uses `circadian_pro.set_manual_control`. Normal Home Assistant entity
+and service permissions still apply.
 
 ## Installation
 

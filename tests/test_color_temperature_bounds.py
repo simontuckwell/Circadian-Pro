@@ -172,6 +172,8 @@ def production_namespace():
         "switch.py",
         {
             "BRIGHTNESS_CHANGE",
+            "BRIGHTNESS_CHANGE_RATIO",
+            "TRANSITION_SETTLE_SECONDS",
             "COLOR_TEMP_CHANGE",
             "RGB_REDMEAN_CHANGE",
             "_DOMAIN_SHORT",
@@ -183,6 +185,7 @@ def production_namespace():
             "_calibrated_white_channels",
             "_calibrated_rgb_from_kelvin",
             "_has_color_mode_changed",
+            "_brightness_change_threshold",
             "_attributes_have_changed",
             "_add_missing_attributes",
             "_convert_attributes",
@@ -203,6 +206,8 @@ def production_namespace():
         namespace,
         "switch.py",
         {
+            "_notify_manual_state_change",
+            "_log_activity_for_light",
             "significant_change",
             "update_manually_controlled_from_untracked_change",
             "get_adaption_control_attributes",
@@ -210,6 +215,7 @@ def production_namespace():
             "add_manual_control_attributes",
             "set_manual_control_attributes",
             "_handle_timer",
+            "start_transition_timer",
         },
         "CircadianProManager",
     )
@@ -226,6 +232,7 @@ class ProtocolHarness:
         self.calibration_targets = []
         self.refreshed_lights = []
         self.sleeps = []
+        self.started_transitions = []
         self.context_counter = 0
         self.state = State(
             {
@@ -265,6 +272,7 @@ class ProtocolHarness:
         rgb_fixtures = {
             1000: (255, 56, 0),
             1200: (255, 80, 0),
+            2200: (255, 150, 55),
             3500: (255, 200, 180),
             4000: (255, 228, 206),
             10000: (205, 228, 255),
@@ -287,11 +295,14 @@ class ProtocolHarness:
             last_service_context={},
             last_service_acknowledgements={},
             our_last_state_on_change={},
+            start_transition_timer=lambda light: self.started_transitions.append(light),
             manual_control={},
             auto_reset_manual_control_times={},
             auto_reset_manual_control_timers={},
         )
         for name in (
+            "_notify_manual_state_change",
+            "_log_activity_for_light",
             "significant_change",
             "update_manually_controlled_from_untracked_change",
             "get_adaption_control_attributes",
@@ -309,6 +320,7 @@ class ProtocolHarness:
             entity_id="switch.circadian_pro_example_a",
             _transition=0,
             _prefer_rgb_color=False,
+            _color_mode_preference="auto",
             _send_split_delay=0,
             _separate_turn_on_commands=False,
             _skip_redundant_commands=False,
@@ -382,6 +394,61 @@ class ProtocolHarness:
         return self.manager.get_manual_control_attributes(self.light)
 
 
+class ManualBrightnessToleranceTests(unittest.TestCase):
+    """Manual dimming must remain observable even at the bottom of the range."""
+
+    def test_ten_percent_to_one_percent_is_manual(self):
+        harness = ProtocolHarness(modes=("color_temp",))
+        harness.dispatch(3500)
+        # The previous CP command had set this group to 10% (26/255).
+        harness.manager.last_service_data[harness.light]["brightness"] = 26
+        harness.state.attributes["brightness"] = 3
+        flags = harness.ns["LightControlAttributes"]
+        self.assertEqual(harness.detect_manual_change(), flags.BRIGHTNESS)
+        self.assertEqual(harness.manager.get_manual_control_attributes(harness.light), flags.BRIGHTNESS)
+
+    def test_small_device_rounding_does_not_trigger_manual(self):
+        for expected, reported in ((26, 24), (255, 251), (1, 3)):
+            with self.subTest(expected=expected, reported=reported):
+                harness = ProtocolHarness(modes=("color_temp",))
+                harness.dispatch(3500)
+                harness.manager.last_service_data[harness.light]["brightness"] = expected
+                harness.state.attributes["brightness"] = reported
+                self.assertEqual(
+                    harness.detect_manual_change(),
+                    harness.ns["LightControlAttributes"].NONE,
+                )
+
+    def test_low_brightness_zero_report_is_not_ignored(self):
+        harness = ProtocolHarness(modes=("color_temp",))
+        harness.dispatch(3500)
+        harness.manager.last_service_data[harness.light]["brightness"] = 26
+        harness.state.attributes["brightness"] = 0
+        self.assertEqual(
+            harness.detect_manual_change(),
+            harness.ns["LightControlAttributes"].BRIGHTNESS,
+        )
+
+    def test_transition_timer_includes_device_settling_margin(self):
+        harness = ProtocolHarness(modes=("color_temp",))
+        harness.dispatch(3500)
+        self.assertEqual(harness.started_transitions, [harness.light])
+
+        scheduled = []
+        manager = SimpleNamespace(
+            last_service_data={harness.light: {"transition": 5}},
+            transition_timers={},
+            _handle_timer=lambda light, timers, delay, reset: scheduled.append((light, delay)),
+        )
+        harness.ns["start_transition_timer"](manager, harness.light)
+        self.assertEqual(scheduled, [(harness.light, 7.0)])
+
+        # A zero-transition command still needs a short reporting margin.
+        manager.last_service_data[harness.light] = {"brightness": 26}
+        harness.ns["start_transition_timer"](manager, harness.light)
+        self.assertEqual(scheduled[-1], (harness.light, 2.0))
+
+
 class ColorTemperatureBoundsTests(unittest.TestCase):
     def test_cct_only_wire_payload_respects_device_range(self):
         for target, expected in ((1200, 2000), (3500, 3500), (10000, 6535)):
@@ -397,6 +464,120 @@ class ColorTemperatureBoundsTests(unittest.TestCase):
                 self.assertEqual(
                     harness.manager.last_service_data[harness.light], payload
                 )
+
+    def test_colour_mode_policies_on_mixed_ct_and_xy_group(self):
+        # The same Hue room can expose native CCT and XY. Policies must
+        # differ even at identical brightness and target Kelvin values.
+        expected = {
+            ("auto", 3500): ("color_temp_kelvin", 3500),
+            ("cct", 3500): ("color_temp_kelvin", 3500),
+            ("rgb", 3500): ("rgb_color", None),
+            ("auto", 1000): ("rgb_color", (255, 56, 0)),
+            ("cct", 1000): ("color_temp_kelvin", 2202),
+            ("rgb", 1000): ("rgb_color", (255, 56, 0)),
+        }
+        for (mode, kelvin), (key, value) in expected.items():
+            with self.subTest(mode=mode, kelvin=kelvin):
+                harness = ProtocolHarness(
+                    modes=("color_temp", "xy"), bounds=(2202, 6535)
+                )
+                harness.switch._color_mode_preference = mode
+                payload = harness.dispatch(kelvin)
+                if value is None:
+                    self.assertEqual(len(payload[key]), 3)
+                    self.assertTrue(all(0 <= v <= 255 for v in payload[key]))
+                else:
+                    self.assertEqual(payload[key], value)
+                self.assertEqual(payload["brightness"], 255)
+                other_key = "rgb_color" if key == "color_temp_kelvin" else "color_temp_kelvin"
+                self.assertNotIn(other_key, payload)
+
+    def test_rgb_preference_falls_back_to_cct_on_white_only_lamp(self):
+        harness = ProtocolHarness(modes=("color_temp",), bounds=(2202, 6535))
+        harness.switch._color_mode_preference = "rgb"
+        payload = harness.dispatch(1000)
+        self.assertEqual(payload["color_temp_kelvin"], 2202)
+        self.assertNotIn("rgb_color", payload)
+
+    def test_sleep_colour_choice_overrides_regular_preference(self):
+        harness = ProtocolHarness(modes=("color_temp", "xy"))
+        harness.switch._color_mode_preference = "cct"
+        payload = harness.dispatch(3500, sleep=True, rgb=(60, 40, 20))
+        self.assertEqual(payload["rgb_color"], (60, 40, 20))
+        self.assertNotIn("color_temp_kelvin", payload)
+
+        harness = ProtocolHarness(modes=("color_temp", "xy"))
+        harness.switch._color_mode_preference = "rgb"
+        # An explicitly configured CT sleep mode remains CCT.
+        harness.switch._effective_sleep_state = lambda: True
+        harness.switch._sun_light_settings = SimpleNamespace(
+            sleep_rgb_or_color_temp="color_temp",
+            get_settings=lambda *args: {
+                "brightness_pct": 100, "color_temp_kelvin": 2100,
+                "force_rgb_color": False, "rgb_color": (255, 56, 0),
+            },
+        )
+        data = complete_immediate(
+            harness.ns["prepare_switch_adaptation_data"](
+                harness.switch, harness.light, force=True,
+            )
+        )
+        complete_immediate(
+            harness.ns["_execute_adaptation_calls"](harness.switch, data)
+        )
+        self.assertEqual(harness.calls[-1][2]["color_temp_kelvin"], 2202)
+
+    def test_existing_profile_auto_and_explicit_legacy_rgb_override(self):
+        harness = ProtocolHarness(modes=("color_temp", "xy"))
+        self.assertEqual(harness.dispatch(3500)["color_temp_kelvin"], 3500)
+        harness = ProtocolHarness(modes=("color_temp", "xy"))
+        harness.switch._color_mode_preference = "cct"
+        data = complete_immediate(
+            harness.ns["prepare_switch_adaptation_data"](
+                harness.switch, harness.light, force=True, prefer_rgb_color=True,
+            )
+        )
+        complete_immediate(
+            harness.ns["_execute_adaptation_calls"](harness.switch, data)
+        )
+        self.assertIn("rgb_color", harness.calls[-1][2])
+
+    def test_hue_group_rounding_at_warm_endpoint_uses_native_ct(self):
+        # Real Hue room: CT and XY are advertised even though its Being lamps
+        # only need warm/cool whites. 2200 K rounds to 2202 K at the mired
+        # boundary, and the former implementation unexpectedly used RGB.
+        harness = ProtocolHarness(modes=("color_temp", "xy"), bounds=(2202, 6535))
+        payload = harness.dispatch(2200)
+        self.assertEqual(payload["color_temp_kelvin"], 2202)
+        self.assertNotIn("rgb_color", payload)
+        self.assertEqual(
+            harness.manager.last_service_data[harness.light]["color_temp_kelvin"],
+            2202,
+        )
+
+        # The room may report 2257 K after an acknowledged CT operation.
+        # That is within the existing 100 K significance tolerance, and
+        # it must not be reported as an external change of colour mode.
+        harness.state.attributes.update(
+            color_mode="color_temp", color_temp_kelvin=2257, brightness=255,
+        )
+        self.assertEqual(
+            harness.detect_manual_change(),
+            harness.ns["LightControlAttributes"].NONE,
+        )
+
+        # A genuine Hue-app adjustment must still trigger the override.
+        harness.state.attributes["color_temp_kelvin"] = 2700
+        self.assertEqual(
+            harness.detect_manual_change(),
+            harness.ns["LightControlAttributes"].COLOR,
+        )
+
+    def test_far_outside_ct_limit_still_allows_rgb_fallback(self):
+        harness = ProtocolHarness(modes=("color_temp", "xy"), bounds=(2202, 6535))
+        payload = harness.dispatch(1200)
+        self.assertIn("rgb_color", payload)
+        self.assertNotIn("color_temp_kelvin", payload)
 
     def test_rgbw_calibration_keeps_requested_kelvin(self):
         harness = ProtocolHarness(modes=("rgbw",))
@@ -457,6 +638,125 @@ class ColorTemperatureBoundsTests(unittest.TestCase):
             harness.manager.get_adaption_control_attributes(harness.switch, harness.light),
             flags.NONE,
         )
+
+
+class HueRGBToXYTests(unittest.TestCase):
+    """Hue room reports native XY for CP's RGB command (not manual control)."""
+
+    def hue_rgb_profile(self):
+        harness = ProtocolHarness(modes=("color_temp", "xy"), bounds=(2000, 6535))
+        payload = harness.dispatch(
+            1000, force_rgb=True, rgb=(255, 56, 0),
+        )
+        self.assertEqual(payload["rgb_color"], (255, 56, 0))
+        self.assertNotIn("color_temp_kelvin", payload)
+        return harness
+
+    def test_hue_native_xy_acknowledgement_is_not_a_manual_override(self):
+        harness = self.hue_rgb_profile()
+        harness.state.attributes.update(
+            color_mode="xy",
+            rgb_color=(255, 59, 0),
+            xy_color=(0.682, 0.315),
+            brightness=255,
+        )
+        self.assertEqual(
+            harness.detect_manual_change(),
+            harness.ns["LightControlAttributes"].NONE,
+        )
+        self.assertEqual(harness.events, [])
+        self.assertEqual(
+            harness.manager.get_adaption_control_attributes(
+                harness.switch, harness.light,
+            ),
+            harness.ns["LightControlAttributes"].ALL,
+        )
+
+    def test_changed_hue_scene_still_pauses_manual_control(self):
+        harness = self.hue_rgb_profile()
+        harness.state.attributes.update(
+            color_mode="xy",
+            rgb_color=(0, 30, 255),
+            xy_color=(0.15, 0.06),
+            brightness=255,
+        )
+        self.assertEqual(
+            harness.detect_manual_change(),
+            harness.ns["LightControlAttributes"].COLOR,
+        )
+        self.assertEqual(
+            harness.events[0][0], "circadian_pro.manual_control",
+        )
+
+    def test_non_native_xy_does_not_bypass_mode_change_detection(self):
+        # Only Hue-style RGB->XY translation should be exempt. A lamp with
+        # native RGB support that changes into XY is a genuine mode change.
+        harness = ProtocolHarness(modes=("rgb", "xy"))
+        payload = harness.dispatch(1000, force_rgb=True, rgb=(255, 56, 0))
+        self.assertEqual(payload["rgb_color"], (255, 56, 0))
+        harness.state.attributes.update(
+            color_mode="xy",
+            rgb_color=(255, 59, 0),
+            xy_color=(0.682, 0.315),
+        )
+        self.assertEqual(
+            harness.detect_manual_change(),
+            harness.ns["LightControlAttributes"].COLOR,
+        )
+
+    def test_no_rgb_readback_does_not_suppress_manual_mode_change(self):
+        harness = self.hue_rgb_profile()
+        harness.state.attributes.update(
+            color_mode="xy",
+            rgb_color=None,
+            xy_color=(0.682, 0.315),
+        )
+        self.assertEqual(
+            harness.detect_manual_change(),
+            harness.ns["LightControlAttributes"].COLOR,
+        )
+
+    def test_unsupported_requested_rgb_still_detects_ct_mode_change(self):
+        harness = self.hue_rgb_profile()
+        harness.state.attributes.update(
+            color_mode="color_temp",
+            color_temp_kelvin=2202,
+            rgb_color=(255, 59, 0),
+        )
+        self.assertEqual(
+            harness.detect_manual_change(),
+            harness.ns["LightControlAttributes"].COLOR,
+        )
+
+
+class ColourPolicyNativeChannelTests(unittest.TestCase):
+    def test_rgbww_choice_disables_white_channels_only_when_preferred(self):
+        for mode in ("auto", "rgb", "cct"):
+            with self.subTest(mode=mode):
+                harness = ProtocolHarness(modes=("rgbww", "color_temp"))
+                harness.switch._color_mode_preference = mode
+                payload = harness.dispatch(3500)
+                if mode == "cct":
+                    self.assertEqual(payload["color_temp_kelvin"], 3500)
+                    self.assertNotIn("rgbww_color", payload)
+                else:
+                    self.assertIn("rgbww_color", payload)
+                    if mode == "rgb":
+                        self.assertEqual(payload["rgbww_color"][3:], (0, 0))
+                    else:
+                        self.assertGreater(sum(payload["rgbww_color"][3:]), 0)
+
+    def test_rgbw_without_cct_falls_back_to_rgbw_in_cct_preference(self):
+        harness = ProtocolHarness(modes=("rgbw",))
+        harness.switch._color_mode_preference = "cct"
+        payload = harness.dispatch(3500)
+        self.assertIn("rgbw_color", payload)
+        self.assertGreater(payload["rgbw_color"][3], 0)
+
+        harness = ProtocolHarness(modes=("rgbw",))
+        harness.switch._color_mode_preference = "rgb"
+        payload = harness.dispatch(3500)
+        self.assertEqual(payload["rgbw_color"][3], 0)
 
 
 class RGBWWProtocolTests(unittest.TestCase):

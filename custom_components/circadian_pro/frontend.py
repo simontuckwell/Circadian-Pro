@@ -32,6 +32,7 @@ from .const import DOMAIN, EXTRA_VALIDATION, NONE_STR, VALIDATION_TUPLES, _DOMAI
 FRONTEND_DATA = "circadian_pro_frontend"
 PANEL_PATH = "circadian-pro-calibration"
 PANEL_URL = "/circadian_pro_static/calibration-panel.js"
+CARD_URL = "/circadian_pro_static/circadian-pro-card.js"
 _LEGACY_CALIBRATION_OPTIONS = {
     "rgb_calibration_r", "rgb_calibration_g", "rgb_calibration_b",
     "combine_rgbctt_or_rgbw", "combine_rgb_scale", "combine_white_scale",
@@ -45,7 +46,7 @@ _SOLAR_TIME_OPTIONS = (
 _SOLAR_OFFSET_OPTIONS = ("sunrise_offset", "sunset_offset")
 _SLEEP_TIME_OPTIONS = ("sleep_schedule_start", "sleep_schedule_end")
 _SOLAR_DRAFT_OPTIONS = frozenset((*_SOLAR_TIME_OPTIONS, *_SOLAR_OFFSET_OPTIONS,
-                                "sunrise_offset_minutes", "sunset_offset_minutes",
+                                "brightness_mode", "sunrise_offset_minutes", "sunset_offset_minutes",
                                 "sleep_activation_mode", *_SLEEP_TIME_OPTIONS))
 
 
@@ -192,6 +193,7 @@ def _schedule_sleep_windows(
 
 def _solar_context(
     sun: Any, now: datetime, timezone_name: str, sleep_settings: dict[str, Any] | None = None,
+    include_solar_elevation: bool = False,
 ) -> dict[str, Any]:
     """Calculate the profile's real local day without changing its runtime state."""
     from .color_and_brightness import SunEventUnavailable
@@ -274,7 +276,21 @@ def _solar_context(
         window_end = datetime.combine(today + timedelta(days=3), time(), sun.timezone).timestamp()
         sleep_windows = _schedule_sleep_windows(window_start, window_end, sun.timezone, sleep_start, sleep_end)
 
+    # The preview uses the very same Astral/elevation calculation as the
+    # lighting engine, not a time-based approximation in JavaScript.
+    # Generate these samples only for the Solar Elevation mode.
+    solar_elevation_samples = None
+    if include_solar_elevation:
+        sample_times = {start, end}
+        sample_times.update(start + step * 240 for step in range(int((end - start) // 240) + 1))
+        sample_times.update(timestamp for _event, timestamp in events if start <= timestamp <= end)
+        solar_elevation_samples = [
+            [(timestamp - start) / 60, sun.solar_elevation_progress(datetime.fromtimestamp(timestamp, UTC))]
+            for timestamp in sorted(sample_times) if start <= timestamp <= end
+        ]
+
     return {
+        "solar_elevation_samples": solar_elevation_samples,
         "local_date": today.isoformat(), "timezone": timezone_name,
         "day_start": start, "day_end": end, "refresh_at": end,
         "generated_at": now.timestamp(), "refresh_after": max(1, end - now.timestamp()),
@@ -327,6 +343,7 @@ async def websocket_solar(hass: Any, connection: Any, msg: dict[str, Any]) -> No
     try:
         result = await hass.async_add_executor_job(
             _solar_context, sun, datetime.now(UTC), timezone_name, sleep_settings,
+            settings.get("brightness_mode") == "solar_elevation",
         )
     except (ValueError, OverflowError) as err:
         connection.send_error(msg["id"], "solar_unavailable", str(err))
@@ -410,7 +427,9 @@ async def async_setup_frontend(hass: Any) -> None:
     lock = data.setdefault("lock", asyncio.Lock())
     async with lock:
         if not data.get("api_registered"):
-            for handler in (websocket_entries, websocket_preview, websocket_stop, websocket_translations, websocket_solar):
+            from .card import websocket_card_curve
+
+            for handler in (websocket_entries, websocket_preview, websocket_stop, websocket_translations, websocket_solar, websocket_card_curve):
                 websocket_api.async_register_command(hass, handler)
             data["api_registered"] = True
         if not data.get("static_registered"):
@@ -421,6 +440,7 @@ async def async_setup_frontend(hass: Any) -> None:
             await hass.http.async_register_static_paths([
                 StaticPathConfig(PANEL_URL, str(asset_path), False),
                 StaticPathConfig(module_url, str(asset_path), False),
+                StaticPathConfig(CARD_URL, str(Path(__file__).parent / "frontend" / "circadian-pro-card.js"), False),
             ])
             data["module_url"] = module_url
             data["element_name"] = element_name

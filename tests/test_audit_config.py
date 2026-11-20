@@ -141,6 +141,26 @@ class ConfigAuditTests(unittest.TestCase):
         self.assertEqual(fields["sleep_schedule_end"][0], "05:00:00")
         self.assertEqual(fields["interval"][0], 61)
 
+    def test_colour_output_mode_preserves_legacy_rgb_and_allows_explicit_auto(self):
+        # A profile with prefer_rgb_color=true predates the new UI selector.
+        # Opening the profile editor must not silently change its behaviour.
+        flow = self.options_flow({"prefer_rgb_color": True})
+        fields = flow_fixtures.form_fields(immediate(flow.async_step_init()))
+        self.assertEqual(fields["color_mode_preference"][0], "rgb")
+
+        # Once explicitly saved, Auto takes precedence over the historical flag.
+        flow = self.options_flow({
+            "prefer_rgb_color": True,
+            "color_mode_preference": "auto",
+        })
+        fields = flow_fixtures.form_fields(immediate(flow.async_step_init()))
+        self.assertEqual(fields["color_mode_preference"][0], "auto")
+
+    def test_colour_output_mode_is_present_for_new_profiles(self):
+        flow = self.options_flow({})
+        fields = flow_fixtures.form_fields(immediate(flow.async_step_init()))
+        self.assertEqual(fields["color_mode_preference"][0], "auto")
+
     def test_yaml_options_flow_finishes_with_an_informative_abort_without_writing_settings(self):
         data = {"name": "YAML profile", "lights": ["light.yaml"], "max_brightness": 80}
         options = {"max_brightness": 90, "hidden_option": {"keep": True}}

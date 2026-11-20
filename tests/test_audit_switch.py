@@ -62,6 +62,52 @@ class GroupExpansionTests(unittest.TestCase):
 
 
 class AdaptationSafetyTests(unittest.TestCase):
+    def test_redundant_initial_target_still_detects_first_hue_app_override(self):
+        """An already-correct Hue room must not need a second manual adjustment."""
+        h = ProtocolHarness(modes=("color_temp",))
+        h.switch._skip_redundant_commands = True
+        # The initial brightness and CT already equal CP's requested targets.
+        payload = h.dispatch(3500)
+        self.assertIsNone(payload)
+        self.assertEqual(h.calls, [])
+        self.assertEqual(h.manager.last_service_data[h.light]["brightness"], 255)
+        self.assertEqual(h.manager.last_service_data[h.light]["color_temp_kelvin"], 3500)
+
+        # Change the room via Hue, not a HA light.turn_on service call.
+        h.state.attributes["brightness"] = 95
+        changed = complete_immediate(h.ns["significant_change"](
+            h.manager, h.switch, h.light, SimpleNamespace(id="poll"),
+        ))
+        self.assertIn(h.ns["LightControlAttributes"].BRIGHTNESS, changed)
+        complete_immediate(h.ns["update_manually_controlled_from_untracked_change"](
+            h.manager, h.switch, h.light, False, SimpleNamespace(id="poll"),
+        ))
+        self.assertTrue(h.manager.manual_control[h.light].has_any())
+        self.assertTrue(h.events)
+
+    def test_partial_redundant_target_retains_unsent_brightness_baseline(self):
+        h = ProtocolHarness(modes=("color_temp",))
+        h.switch._skip_redundant_commands = True
+        # A needed colour command is sent, but the brightness command is omitted.
+        h.dispatch(4000)
+        self.assertEqual(len(h.calls), 1)
+        self.assertEqual(h.manager.last_service_data[h.light]["brightness"], 255)
+        self.assertEqual(h.manager.last_service_data[h.light]["color_temp_kelvin"], 4000)
+        h.state.attributes["brightness"] = 100
+        changed = complete_immediate(h.ns["significant_change"](
+            h.manager, h.switch, h.light, SimpleNamespace(id="poll"),
+        ))
+        self.assertIn(h.ns["LightControlAttributes"].BRIGHTNESS, changed)
+
+    def test_nonredundant_targets_are_not_assumed_to_have_been_applied(self):
+        h = ProtocolHarness(modes=("color_temp",))
+        h.switch._skip_redundant_commands = True
+        h.dispatch(4000)
+        # A colour command was sent and its expected value is known; the
+        # unsent baseline is seeded only from attributes matching HA state.
+        self.assertEqual(h.manager.last_service_data[h.light]["brightness"], 255)
+        self.assertEqual(h.manager.last_service_data[h.light]["color_temp_kelvin"], 4000)
+
     def test_split_commands_keep_brightness_for_external_change_detection(self):
         h = ProtocolHarness()
         h.switch._separate_turn_on_commands = True
@@ -107,7 +153,8 @@ class AdaptationSafetyTests(unittest.TestCase):
         payload = h.dispatch(4000)
         self.assertEqual(payload.get("color_temp_kelvin"), 4000)
         self.assertNotIn("rgb_color", payload)
-        h.switch._prefer_rgb_color = True
+        # The newer per-profile selector supersedes the legacy boolean.
+        h.switch._color_mode_preference = "rgb"
         payload = h.dispatch(4000)
         self.assertIn("rgb_color", payload)
         self.assertNotIn("color_temp_kelvin", payload)
@@ -205,6 +252,126 @@ class ManagerEventTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(h.calls), 1)
 
 
+class ActivityLoggingTests(unittest.TestCase):
+    """The Activity feed records state changes, not every adaptation interval."""
+
+    def setUp(self):
+        self.ns = namespace()
+        self.ns["EVENT_LOGBOOK_ENTRY"] = "logbook_entry"
+        self.ns["ATTR_DOMAIN"] = "domain"
+        self.ns["SWITCH_DOMAIN"] = "switch"
+        load_functions(self.ns, "switch.py", {"log_activity"}, "CircadianProSwitch")
+        load_functions(self.ns, "switch.py", {
+            "_notify_manual_state_change", "_log_activity_for_light", "get_manual_control_attributes",
+            "set_manual_control_attributes", "add_manual_control_attributes", "reset",
+        }, "CircadianProManager")
+        self.events = []
+        self.context = SimpleNamespace(id="hue-change", user_id=None)
+        state = SimpleNamespace(name="Simon's Study", state="on")
+        self.hass = SimpleNamespace(
+            is_running=True,
+            states=SimpleNamespace(get=lambda _: state),
+            bus=SimpleNamespace(async_fire=lambda event, data, **kwargs:
+                                self.events.append((event, data, kwargs.get("context")))),
+        )
+        self.switch = SimpleNamespace(
+            _name="Simon's Study", entity_id="switch.circadian_pro_simon_s_study",
+            lights=["light.study"], is_on=True, hass=self.hass,
+        )
+        self.switch.log_activity = MethodType(self.ns["log_activity"], self.switch)
+        self.switch.activity_writes = 0
+        def write_profile_state():
+            self.switch.activity_writes += 1
+        self.switch.async_write_ha_state = write_profile_state
+        self.manager = SimpleNamespace(
+            _disabled=False, hass=self.hass, switches=[self.switch],
+            manual_control={}, auto_reset_manual_control_times={},
+            auto_reset_manual_control_timers={},
+            our_last_state_on_change={}, last_service_data={},
+            last_service_context={}, last_service_acknowledgements={},
+            cancel_ongoing_adaptation_calls=lambda _: None,
+            _handle_timer=lambda *args: None,
+        )
+        for name in ("_notify_manual_state_change", "_log_activity_for_light", "get_manual_control_attributes",
+                     "set_manual_control_attributes", "add_manual_control_attributes", "reset"):
+            setattr(self.manager, name, MethodType(self.ns[name], self.manager))
+        self.flags = self.ns["LightControlAttributes"]
+
+    def test_first_override_and_clear_both_log_once_with_context(self):
+        self.manager.set_manual_control_attributes(
+            "light.study", self.flags.BRIGHTNESS, context=self.context,
+        )
+        self.manager.add_manual_control_attributes(
+            "light.study", self.flags.COLOR, context=self.context,
+        )
+        self.assertEqual(len(self.events), 1)
+        event, data, context = self.events[0]
+        self.assertEqual(event, "logbook_entry")
+        self.assertEqual(context, self.context)
+        self.assertEqual(data["entity_id"], self.switch.entity_id)
+        self.assertEqual(data["domain"], "switch")
+        self.assertIn("Manual override detected", data["message"])
+        self.manager.reset("light.study", reason="light_off", context=self.context)
+        self.manager.reset("light.study", reason="light_off", context=self.context)
+        self.assertEqual(len(self.events), 2)
+        self.assertEqual(self.switch.activity_writes, 3)
+        self.assertIn("light switched off", self.events[1][1]["message"])
+        self.assertIs(self.events[1][2], self.context)
+
+    def test_internal_baseline_reset_does_not_clear_manual_flag_or_log(self):
+        self.manager.set_manual_control_attributes("light.study", self.flags.ALL)
+        self.events.clear()
+        self.manager.reset("light.study", reset_manual_control=False)
+        self.assertEqual(self.manager.manual_control["light.study"], self.flags.ALL)
+        self.assertEqual(self.events, [])
+
+    def test_resumed_by_user_and_timeout_have_distinct_reasons(self):
+        for reason, message in (("service", "resumed by user"), ("timeout", "automatic timeout")):
+            self.manager.set_manual_control_attributes("light.study", self.flags.ALL)
+            self.manager.reset("light.study", reason=reason)
+            self.assertIn(message, self.events[-1][1]["message"])
+        self.assertEqual(len(self.events), 4)
+
+    def test_explicit_pause_and_resume_log_but_initial_restore_does_not(self):
+        ns = self.ns
+        load_functions(ns, "switch.py", {"async_turn_on", "async_turn_off"}, "CircadianProSwitch")
+
+        class FakeSwitch:
+            @property
+            def is_on(self):
+                return self._state
+
+        switch = FakeSwitch()
+        switch._name = "Simon's Study"
+        switch.entity_id = self.switch.entity_id
+        switch.hass = self.hass
+        switch._state = False
+        switch._activity_initialized = False
+        switch.lights = ["light.study"]
+        switch.initial_transition = 0
+        switch.manager = SimpleNamespace(reset=lambda *args, **kwargs: None)
+        switch._remove_listeners = lambda: None
+        async def setup_listeners():
+            return None
+        switch._setup_listeners = setup_listeners
+        switch.log_activity = MethodType(ns["log_activity"], switch)
+
+        complete_immediate(ns["async_turn_on"](switch, adapt_lights=False))
+        self.assertEqual(self.events, [])
+        switch._activity_initialized = True
+        complete_immediate(ns["async_turn_off"](switch))
+        complete_immediate(ns["async_turn_on"](switch, adapt_lights=False))
+        self.assertEqual(len(self.events), 2)
+        self.assertIn("paused", self.events[0][1]["message"])
+        self.assertIn("resumed", self.events[1][1]["message"])
+
+    def test_no_activity_when_integration_is_shutting_down(self):
+        self.manager._disabled = True
+        self.manager.set_manual_control_attributes("light.study", self.flags.ALL)
+        self.manager.reset("light.study")
+        self.assertEqual(self.events, [])
+
+
 class TargetResolutionTests(unittest.TestCase):
     def test_combines_target_selectors_and_filters_non_light_entities(self):
         ns = namespace()
@@ -232,6 +399,35 @@ class TargetResolutionTests(unittest.TestCase):
 
 
 class BatchAndLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_interval_defers_untracked_change_check_until_transition_settles(self):
+        ns = namespace()
+        load_functions(ns, "switch.py", {"_update_attrs_and_maybe_adapt_lights"}, "CircadianProSwitch")
+        light = "light.aquarium"
+        examined = []
+
+        async def examine(*_):
+            examined.append(light)
+
+        state = State({"brightness": 26})
+        timer = SimpleNamespace(is_running=lambda: True)
+        manager = SimpleNamespace(
+            transition_timers={light: timer},
+            update_manually_controlled_from_untracked_change=examine,
+        )
+        switch = SimpleNamespace(
+            _name="Aquarium", is_on=True, _only_once=False,
+            _transition=5, _detect_non_ha_changes=True,
+            _sun_light_settings=SimpleNamespace(get_settings=lambda *_: {"brightness_pct": 10}),
+            _effective_sleep_state=lambda: False,
+            _settings={}, async_write_ha_state=lambda: None,
+            lights=[light], manager=manager,
+            hass=SimpleNamespace(states=SimpleNamespace(get=lambda _: state)),
+        )
+        await ns["_update_attrs_and_maybe_adapt_lights"](
+            switch, context=SimpleNamespace(id="interval"), force=False,
+        )
+        self.assertEqual(examined, [])
+
     async def test_queued_update_after_profile_off_returns_without_commands(self):
         ns = namespace()
         load_functions(ns, "switch.py", {"_update_attrs_and_maybe_adapt_lights"}, "CircadianProSwitch")

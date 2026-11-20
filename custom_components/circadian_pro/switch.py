@@ -48,6 +48,7 @@ from homeassistant.const import (
     CONF_PARAMS,
     EVENT_CALL_SERVICE,
     EVENT_HOMEASSISTANT_STARTED,
+    EVENT_LOGBOOK_ENTRY,
     EVENT_STATE_CHANGED,
     SERVICE_TOGGLE,
     SERVICE_TURN_OFF,
@@ -93,6 +94,7 @@ from .adaptation_utils import (
     has_effect_attribute,
     manual_control_event_attribute_to_flags,
     prepare_adaptation_data,
+    _remove_redundant_attributes,
 )
 from .calibration import is_calibration_preview_active, is_calibration_preview_context
 from .color_and_brightness import SunLightSettings
@@ -138,6 +140,7 @@ from .const import (
     CONF_MULTI_LIGHT_INTERCEPT,
     CONF_ONLY_ONCE,
     CONF_PREFER_RGB_COLOR,
+    CONF_COLOR_MODE_PREFERENCE,
     CONF_SEND_SPLIT_DELAY,
     CONF_SEPARATE_TURN_ON_COMMANDS,
     CONF_SKIP_REDUNDANT_COMMANDS,
@@ -199,10 +202,13 @@ _LOGGER = logging.getLogger(__name__)
 
 SCAN_INTERVAL = timedelta(seconds=10)
 
-# Consider it a significant change when attribute changes more than
-BRIGHTNESS_CHANGE = 25  # ≈10% of total range
+# Small absolute tolerance at low brightness (about one percentage point),
+# with a modest relative allowance for higher-brightness device quantisation.
+BRIGHTNESS_CHANGE = 3  # HA's 0-255 brightness scale
+BRIGHTNESS_CHANGE_RATIO = 0.02  # 2% of the requested brightness
 COLOR_TEMP_CHANGE = 100  # ≈3% of total range (2000-6500)
 RGB_REDMEAN_CHANGE = 80  # ≈10% of total range
+TRANSITION_SETTLE_SECONDS = 2.0  # Allow for delayed Hue state reports
 MAX_STATE_HISTORY = 8  # Keep the first and most recent reports of one command.
 
 
@@ -534,7 +540,9 @@ async def async_setup_entry(  # noqa: PLR0915
                         transition=data[CONF_TRANSITION],
                         adapt_brightness=data[ATTR_ADAPT_BRIGHTNESS],
                         adapt_color=data[ATTR_ADAPT_COLOR],
-                        prefer_rgb_color=data[CONF_PREFER_RGB_COLOR],
+                        prefer_rgb_color=(
+                            True if data[CONF_PREFER_RGB_COLOR] else None
+                        ),
                         force=True,
                     )
 
@@ -558,13 +566,14 @@ async def async_setup_entry(  # noqa: PLR0915
                     switch.manager.set_manual_control_attributes(
                         light,
                         manual_attributes,
+                        context=service_call.context,
                     )
                     switch.fire_manual_control_event(
                         light,
                         service_call.context,
                     )
             else:
-                switch.manager.reset(*all_lights)
+                switch.manager.reset(*all_lights, reason="service", context=service_call.context)
                 if switch.is_on:
                     context = switch.create_context(
                         "service",
@@ -638,6 +647,20 @@ def validate(
             if key not in (CONF_USE_DEFAULTS, ATTR_ENTITY_ID)
         }
         data.update(changed_settings)
+    # Preserve the historical RGB preference on profiles which have not yet
+    # been edited with the new three-way selector.
+    if config_entry is not None:
+        explicit_mode = (
+            CONF_COLOR_MODE_PREFERENCE in config_entry.options
+            or CONF_COLOR_MODE_PREFERENCE in config_entry.data
+        )
+    else:
+        explicit_mode = (
+            CONF_COLOR_MODE_PREFERENCE in (service_data or {})
+            or CONF_COLOR_MODE_PREFERENCE in (defaults or {})
+        )
+    if not explicit_mode and data.get(CONF_PREFER_RGB_COLOR) is True:
+        data[CONF_COLOR_MODE_PREFERENCE] = "rgb"
     data = {key: replace_none_str(value) for key, value in data.items()}
     for key, (validate_value, _) in EXTRA_VALIDATION.items():
         value = data.get(key)
@@ -1060,7 +1083,38 @@ def _has_color_mode_changed(
     old_mode = color_mode(old_attributes)
     new_mode = color_mode(new_attributes)
 
-    # Check if mode changed
+    # Philips Hue rooms may advertise XY but not native RGB. In that case
+    # light.turn_on(rgb_color=...) is translated by the bridge to XY, while
+    # HA reports a derived rgb_color nearly identical to our requested RGB.
+    # A representation-only round trip must not trigger manual override.
+    # Require a genuinely small difference: a Hue scene changing the actual
+    # colour must still be detected as a manual adjustment.
+    if old_mode == ColorMode.RGB and new_mode == ColorMode.XY:
+        native_modes = new_attributes.get(ATTR_SUPPORTED_COLOR_MODES) or ()
+        requested_rgb = old_attributes.get(ATTR_RGB_COLOR)
+        reported_rgb = new_attributes.get(ATTR_RGB_COLOR)
+        if (
+            ColorMode.XY in native_modes
+            and ColorMode.RGB not in native_modes
+            and isinstance(requested_rgb, (tuple, list))
+            and isinstance(reported_rgb, (tuple, list))
+            and len(requested_rgb) == len(reported_rgb) == 3
+            and all(
+                isinstance(value, (int, float))
+                for value in (*requested_rgb, *reported_rgb)
+            )
+        ):
+            deviation = color_difference_redmean(requested_rgb, reported_rgb)
+            if deviation <= 16:
+                _LOGGER.debug(
+                    "Treating RGB to XY report for '%s' as Hue colour "
+                    "normalisation (requested=%s, reported=%s, "
+                    "redmean difference=%.1f, context.id='%s')",
+                    light, requested_rgb, reported_rgb, deviation, context.id,
+                )
+                return False
+
+    # All other colour-mode changes (and real changes of colour) remain manual.
     if old_mode is not None and new_mode is not None and old_mode != new_mode:
         _LOGGER.debug(
             "Light mode of %s changed from %s to %s with context.id='%s'",
@@ -1071,6 +1125,11 @@ def _has_color_mode_changed(
         )
         return True
     return False
+
+
+def _brightness_change_threshold(requested_brightness: int | float) -> int:
+    """Allow minor device rounding without masking dim-level manual changes."""
+    return max(BRIGHTNESS_CHANGE, round(requested_brightness * BRIGHTNESS_CHANGE_RATIO))
 
 
 def _attributes_have_changed(
@@ -1118,16 +1177,18 @@ def _attributes_have_changed(
             new_attributes,
         )
 
-    if old_attributes.get(ATTR_BRIGHTNESS) and new_attributes.get(ATTR_BRIGHTNESS):
-        last_brightness = old_attributes[ATTR_BRIGHTNESS]
-        current_brightness = new_attributes[ATTR_BRIGHTNESS]
-        if abs(current_brightness - last_brightness) > BRIGHTNESS_CHANGE:
+    last_brightness = old_attributes.get(ATTR_BRIGHTNESS)
+    current_brightness = new_attributes.get(ATTR_BRIGHTNESS)
+    if last_brightness is not None and current_brightness is not None:
+        threshold = _brightness_change_threshold(last_brightness)
+        if abs(current_brightness - last_brightness) > threshold:
             _LOGGER.debug(
-                "Brightness of '%s' significantly changed from %s to %s with"
-                " context.id='%s'",
+                "Brightness of '%s' significantly changed from %s to %s "
+                "(tolerance %s) with context.id='%s'",
                 light,
                 last_brightness,
                 current_brightness,
+                threshold,
                 context.id,
             )
             changed_attributes |= LightControlAttributes.BRIGHTNESS
@@ -1268,7 +1329,8 @@ class CircadianProSwitch(SwitchEntity, RestoreEntity):
         self.initial_transition = data[CONF_INITIAL_TRANSITION]
         self._sleep_transition = data[CONF_SLEEP_TRANSITION]
         self._only_once = data[CONF_ONLY_ONCE]
-        self._prefer_rgb_color = data[CONF_PREFER_RGB_COLOR]
+        self._prefer_rgb_color = data[CONF_PREFER_RGB_COLOR]  # legacy apply service
+        self._color_mode_preference = data[CONF_COLOR_MODE_PREFERENCE]
         # Circadian Pro: perfil fijo RGBW (auto-detect de CCT si la entidad soporta color_temp)
         self._cal_rgb_neutral: list[int] = [
             data[CONF_CAL_RGB_NEUTRAL_R],
@@ -1403,6 +1465,8 @@ class CircadianProSwitch(SwitchEntity, RestoreEntity):
         else:
             self._state = False
             assert not self.remove_listeners
+        # Restored state is not a deliberate pause/resume action.
+        self._activity_initialized = True
 
     def _expand_light_groups(
         self, hass: HomeAssistant | None = None, *, rebuild: bool = False,
@@ -1482,9 +1546,14 @@ class CircadianProSwitch(SwitchEntity, RestoreEntity):
         """Return the attributes of the switch."""
         extra_state_attributes: dict[str, Any] = {"configuration": self._config}
         if not self.is_on:
+            # Keep the last calculated target available for dashboard cards
+            # without representing it as an actively adapting value.
+            extra_state_attributes["last_target_brightness_pct"] = self._settings.get("brightness_pct")
+            extra_state_attributes["last_target_color_temp_kelvin"] = self._settings.get("color_temp_kelvin")
             for key in self._settings:
                 extra_state_attributes[key] = None
             return extra_state_attributes
+        extra_state_attributes["sleep_active"] = self._effective_sleep_state()
         extra_state_attributes["manual_control"] = [
             light for light in self.lights if self.manager.manual_control.get(light)
         ]
@@ -1507,6 +1576,17 @@ class CircadianProSwitch(SwitchEntity, RestoreEntity):
         self._context_cnt += 1
         return context
 
+    def log_activity(self, message: str, context: Context | None = None) -> None:
+        """Record a meaningful profile decision in Home Assistant Activity."""
+        if not self.entity_id or not self.hass.is_running:
+            return
+        self.hass.bus.async_fire(
+            EVENT_LOGBOOK_ENTRY,
+            {"name": self._name, "message": message,
+             ATTR_ENTITY_ID: self.entity_id, ATTR_DOMAIN: SWITCH_DOMAIN},
+            context=context,
+        )
+
     async def async_turn_on(  # type: ignore[override]
         self,
         adapt_lights: bool = True,
@@ -1528,6 +1608,8 @@ class CircadianProSwitch(SwitchEntity, RestoreEntity):
                 transition=self.initial_transition,
                 force=True,
             )
+        if getattr(self, "_activity_initialized", False):
+            self.log_activity("Automatic adaptation resumed (profile enabled)")
 
     async def async_turn_off(self, **kwargs: Any) -> None:  # noqa: ARG002
         """Turn off circadian pro."""
@@ -1535,7 +1617,9 @@ class CircadianProSwitch(SwitchEntity, RestoreEntity):
             return
         self._state = False
         self._remove_listeners()
-        self.manager.reset(*self.lights)
+        self.manager.reset(*self.lights, reason="profile_paused")
+        if getattr(self, "_activity_initialized", False):
+            self.log_activity("Adaptation paused (profile disabled)")
 
     async def _async_update_at_interval_action(
         self,
@@ -1627,8 +1711,13 @@ class CircadianProSwitch(SwitchEntity, RestoreEntity):
             )
         if adapt_color is None:
             adapt_color = LightControlAttributes.COLOR in adaptation_attributes
-        if prefer_rgb_color is None:
-            prefer_rgb_color = self._prefer_rgb_color
+        # Legacy apply-service prefer_rgb_color=true is an explicit RGB
+        # request. Otherwise the saved three-way profile preference applies.
+        color_preference = (
+            "rgb" if prefer_rgb_color is True
+            else "auto" if prefer_rgb_color is False
+            else self._color_mode_preference
+        )
 
         if not adapt_color and not adapt_brightness:
             _LOGGER.debug(
@@ -1674,11 +1763,18 @@ class CircadianProSwitch(SwitchEntity, RestoreEntity):
         # - En el resto de casos, calculamos RGB calibrado (dos puntos) + W según intensidad
         #   y con 'meseta' hasta el Kelvin real del canal W.
         if adapt_color:
+            # An explicit Sleep profile chooses its own colour representation.
+            # Other night-time blending should respect Prefer CCT.
+            if effective_sleep and not sleep_rgb:
+                color_preference = "cct"
             supported_color_modes = state.attributes.get(ATTR_SUPPORTED_COLOR_MODES, set())
             min_kelvin = state.attributes.get(ATTR_MIN_COLOR_TEMP_KELVIN) or 1000
             max_kelvin = state.attributes.get(ATTR_MAX_COLOR_TEMP_KELVIN) or 10000
 
-            force_rgb = bool(self._settings.get("force_rgb_color", False))
+            force_rgb = (
+                bool(self._settings.get("force_rgb_color", False))
+                and color_preference != "cct"
+            )
 
             if sleep_rgb or force_rgb:
                 # RGB puro en modo noche (o transición hacia él): W siempre a 0
@@ -1715,7 +1811,24 @@ class CircadianProSwitch(SwitchEntity, RestoreEntity):
                     white_w_kelvin=self._white_w_kelvin,
                 )
 
-                if ColorMode.RGBWW in supported_color_modes:
+                if color_preference == "cct" and "color_temp" in features:
+                    # White-only output, even if RGB/XY or RGBWW is also
+                    # supported. Values outside this lamp's CCT range clamp to
+                    # its nearest warm/cool endpoint rather than going red.
+                    service_data[ATTR_COLOR_TEMP_KELVIN] = _clamp_int(
+                        target_kelvin, min_kelvin, max_kelvin,
+                    )
+                elif color_preference == "rgb" and "color" in features:
+                    # Prefer the RGB channels even on genuine RGBW/RGBWW
+                    # devices, where sending mixed white channels would make
+                    # their output far brighter than RGB-only lamps nearby.
+                    if ColorMode.RGBWW in supported_color_modes:
+                        service_data[ATTR_RGBWW_COLOR] = (*cal_rgb, 0, 0)
+                    elif ColorMode.RGBW in supported_color_modes:
+                        service_data[ATTR_RGBW_COLOR] = (*cal_rgb, 0)
+                    else:
+                        service_data[ATTR_RGB_COLOR] = cal_rgb
+                elif ColorMode.RGBWW in supported_color_modes:
                     cold_kelvin = (
                         self._white_cw_kelvin
                         or state.attributes.get(ATTR_MAX_COLOR_TEMP_KELVIN)
@@ -1734,7 +1847,16 @@ class CircadianProSwitch(SwitchEntity, RestoreEntity):
                     service_data[ATTR_RGBW_COLOR] = (cal_rgb[0], cal_rgb[1], cal_rgb[2], w)
                 elif "color_temp" in features and (
                     "color" not in features
-                    or (not prefer_rgb_color and min_kelvin <= target_kelvin <= max_kelvin)
+                    # Hue exposes its CT bounds via integer mireds. The
+                    # Kelvin conversion can put a configured endpoint a few
+                    # degrees outside that interval (e.g. 2200 K vs 2202 K).
+                    # Prefer native CT and clamp such rounding differences:
+                    # sending RGB instead can be reported back as COLOR_TEMP
+                    # and falsely interpreted as a manual colour change.
+                    or (
+                        color_preference != "rgb"
+                        and min_kelvin - 10 <= target_kelvin <= max_kelvin + 10
+                    )
                 ):
                     # Keep the sent target within the light's native range so
                     # rejected commands cannot look like external manual changes.
@@ -1950,6 +2072,42 @@ class CircadianProSwitch(SwitchEntity, RestoreEntity):
                     self.manager.our_last_state_on_change.pop(light, None)
                     self.manager.clear_proactively_adapting(light)
                 raise
+            else:
+                # Some lights do not emit a state_changed event for an identical
+                # command. Keep the periodic poll away from the transition even
+                # when Hue has not acknowledged it with a new HA state.
+                self.manager.start_transition_timer(light)
+
+        # If an initial target already matched the device, redundant-command
+        # filtering could suppress the service call entirely. Remember only
+        # those *verified, unchanged* target attributes so a later Hue-app
+        # adjustment can still be recognised as manual control.
+        target = getattr(data, "target_service_data", None)
+        if self._skip_redundant_commands and target:
+            light = data.entity_id
+            state = self.hass.states.get(light)
+            if state is not None and state.state == STATE_ON:
+                not_matching = _remove_redundant_attributes(target, state)
+                matching = {
+                    key: value for key, value in target.items()
+                    if key in BRIGHTNESS_ATTRS | COLOR_ATTRS and key not in not_matching
+                }
+                if matching:
+                    baseline = self.manager.last_service_data.setdefault(light, {})
+                    seeded = []
+                    for attributes in (BRIGHTNESS_ATTRS, COLOR_ATTRS):
+                        if not any(key in baseline for key in attributes):
+                            for key, value in matching.items():
+                                if key in attributes:
+                                    baseline[key] = value
+                                    seeded.append(key)
+                    if seeded:
+                        self.manager.last_service_context.setdefault(light, data.context.id)
+                        _LOGGER.debug(
+                            "%s: Recorded unchanged target attributes %s for '%s' "
+                            "as a manual-change baseline (no command needed)",
+                            self._name, seeded, light,
+                        )
 
     async def execute_cancellable_adaptation_calls(
         self,
@@ -2130,7 +2288,7 @@ class CircadianProSwitch(SwitchEntity, RestoreEntity):
                 entity_id,
                 event.context.id,
             )
-            self.manager.set_manual_control_attributes(entity_id)
+            self.manager.set_manual_control_attributes(entity_id, context=event.context)
             return
 
         if (
@@ -2177,7 +2335,13 @@ class CircadianProSwitch(SwitchEntity, RestoreEntity):
             event,
         )
         # Reset the manually controlled status when the "sleep mode" changes
-        self.manager.reset(*self.lights)
+        self.manager.reset(*self.lights, reason="sleep_mode", context=event.context)
+        if getattr(self, "_activity_initialized", False):
+            state = event.data["new_state"].state
+            self.log_activity(
+                "Sleep mode activated" if state == STATE_ON else "Sleep mode ended",
+                context=event.context,
+            )
         await self._update_attrs_and_maybe_adapt_lights(
             context=self.create_context("sleep", parent=event.context),
             transition=self._sleep_transition,
@@ -2925,7 +3089,11 @@ class CircadianProManager:
             timer.start()
 
     def start_transition_timer(self, light: str) -> None:
-        """Mark a light as manually controlled."""
+        """Delay periodic polling until Hue's commanded transition has settled.
+
+        Explicit Home Assistant service events remain eligible for immediate
+        manual takeover; this timer only gates periodic untracked-change checks.
+        """
         last_service_data = self.last_service_data.get(light)
         if last_service_data is None:
             _LOGGER.debug(
@@ -2934,28 +3102,18 @@ class CircadianProManager:
             )
             return
 
-        last_transition = last_service_data.get(ATTR_TRANSITION)
-        if not last_transition:
-            _LOGGER.debug(
-                "No transition in last adapt for light %s, not starting timer.",
-                light,
-            )
-            return
-
+        transition = max(0.0, float(last_service_data.get(ATTR_TRANSITION) or 0))
+        delay = transition + TRANSITION_SETTLE_SECONDS
         _LOGGER.debug(
-            "Start transition timer of %s seconds for light %s",
-            last_transition,
-            light,
+            "Waiting %.1f seconds for light %s to settle "
+            "(transition %.1f, reporting margin %.1f)",
+            delay, light, transition, TRANSITION_SETTLE_SECONDS,
         )
 
         async def reset() -> None:
-            # Called when the timer expires, doesn't need to do anything
-            _LOGGER.debug(
-                "Transition finished for light %s",
-                light,
-            )
+            _LOGGER.debug("Transition settled for light %s", light)
 
-        self._handle_timer(light, self.transition_timers, last_transition, reset)
+        self._handle_timer(light, self.transition_timers, delay, reset)
 
     def set_auto_reset_manual_control_times(
         self,
@@ -2988,10 +3146,28 @@ class CircadianProManager:
         """Get the attributes for a light that are manually controlled."""
         return self.manual_control.get(light, LightControlAttributes.NONE)
 
+    def _notify_manual_state_change(self, light: str) -> None:
+        """Publish the new manual flags immediately for live dashboard cards."""
+        for switch in getattr(self, "switches", ()):
+            if light in switch.lights and switch.is_on:
+                callback = getattr(switch, "async_write_ha_state", None)
+                if callback is not None:
+                    callback()
+
+    def _log_activity_for_light(
+        self, light: str, message: str, context: Context | None = None,
+    ) -> None:
+        """Associate manual-control decisions with the corresponding profiles."""
+        for switch in getattr(self, "switches", ()):
+            if light in switch.lights and switch.is_on:
+                switch.log_activity(message, context=context)
+
     def set_manual_control_attributes(
         self,
         light: str,
         attributes: LightControlAttributes = LightControlAttributes.ALL,
+        *,
+        context: Context | None = None,
     ) -> None:
         """Mark attributes of a light as manually controlled."""
         _LOGGER.debug(
@@ -3000,7 +3176,23 @@ class CircadianProManager:
             attributes,
             self.manual_control.get(light, LightControlAttributes.NONE),
         )
+        previous = self.get_manual_control_attributes(light)
         self.manual_control[light] = attributes
+        if previous != attributes and not getattr(self, "_disabled", False):
+            self._notify_manual_state_change(light)
+        if not previous.has_any() and attributes.has_any() and not getattr(self, "_disabled", False):
+            state = self.hass.states.get(light)
+            light_name = getattr(state, "name", light)
+            parts = []
+            if LightControlAttributes.BRIGHTNESS in attributes:
+                parts.append("brightness")
+            if LightControlAttributes.COLOR in attributes:
+                parts.append("colour")
+            self._log_activity_for_light(
+                light,
+                f"Manual override detected for {light_name} ({' and '.join(parts)})",
+                context=context,
+            )
         delay = self.auto_reset_manual_control_times.get(light)
 
         async def reset() -> None:
@@ -3010,7 +3202,7 @@ class CircadianProManager:
                 light,
                 delay,
             )
-            self.reset(light)
+            self.reset(light, reason="timeout")
             switches = _switches_with_lights(self.hass, [light])
             for switch in switches:
                 if not switch.is_on:
@@ -3033,6 +3225,8 @@ class CircadianProManager:
         self,
         light: str,
         attributes: LightControlAttributes,
+        *,
+        context: Context | None = None,
     ) -> None:
         """Add attributes to the manual control status of a light."""
         current = self.get_manual_control_attributes(light)
@@ -3043,7 +3237,7 @@ class CircadianProManager:
             current,
         )
         new = current | attributes
-        self.set_manual_control_attributes(light, new)
+        self.set_manual_control_attributes(light, new, context=context)
 
     def get_adaption_control_attributes(
         self,
@@ -3117,15 +3311,36 @@ class CircadianProManager:
             # color_task might be the same as brightness_task
             color_task.cancel()
 
-    def reset(self, *lights: str, reset_manual_control: bool = True) -> None:
-        """Reset the 'manual_control' status of the lights."""
+    def reset(
+        self, *lights: str, reset_manual_control: bool = True,
+        reason: str = "reset", context: Context | None = None,
+    ) -> None:
+        """Reset a light, recording actual manual-to-automatic transitions."""
         for light in lights:
             if reset_manual_control:
+                previous = self.get_manual_control_attributes(light)
+                if previous.has_any() and not getattr(self, "_disabled", False):
+                    state = self.hass.states.get(light)
+                    light_name = getattr(state, "name", light)
+                    explanations = {
+                        "light_off": "light switched off",
+                        "profile_paused": "profile paused",
+                        "service": "resumed by user",
+                        "timeout": "automatic timeout",
+                        "sleep_mode": "sleep mode changed",
+                    }
+                    suffix = explanations.get(reason)
+                    explanation = f" ({suffix})" if suffix else ""
+                    self._log_activity_for_light(
+                        light, f"Manual override cleared for {light_name}{explanation}",
+                        context=context,
+                    )
                 _LOGGER.debug(
-                    "Light %s: Clearing manual control attributes.",
-                    light,
+                    "Light %s: Clearing manual control attributes.", light,
                 )
                 self.manual_control[light] = LightControlAttributes.NONE
+                if previous.has_any() and not getattr(self, "_disabled", False):
+                    self._notify_manual_state_change(light)
                 if timer := self.auto_reset_manual_control_timers.pop(light, None):
                     timer.cancel()
             self.our_last_state_on_change.pop(light, None)
@@ -3172,7 +3387,7 @@ class CircadianProManager:
 
         def off(eid: str, event: Event) -> None:
             self.turn_off_event[eid] = event
-            self.reset(eid)
+            self.reset(eid, reason="light_off", context=event.context)
 
         async def on(eid: str, event: Event) -> None:
             task = self.sleep_tasks.get(eid)
@@ -3325,7 +3540,7 @@ class CircadianProManager:
         if old_on and new_off:
             # Tracks 'on' → 'off' state changes
             self.on_to_off_event[entity_id] = event
-            self.reset(entity_id)
+            self.reset(entity_id, reason="light_off", context=event.context)
             _LOGGER.debug(
                 "Detected an 'on' → 'off' event for '%s' with context.id='%s'",
                 entity_id,
@@ -3402,7 +3617,7 @@ class CircadianProManager:
 
         # Light was already on and 'light.turn_on' was not called by
         # the circadian_pro integration.
-        self.add_manual_control_attributes(light, turn_on_attributes)
+        self.add_manual_control_attributes(light, turn_on_attributes, context=turn_on_event.context)
         switch.fire_manual_control_event(light, turn_on_event.context)
         _LOGGER.debug(
             "'%s' was already on and 'light.turn_on' was not called by the"
@@ -3446,8 +3661,7 @@ class CircadianProManager:
             return
 
         self.add_manual_control_attributes(
-            light,
-            significantly_changed_attributes,
+            light, significantly_changed_attributes, context=context,
         )
         switch.fire_manual_control_event(light, context)
 
