@@ -172,6 +172,8 @@ def production_namespace():
         "switch.py",
         {
             "BRIGHTNESS_CHANGE",
+            "BRIGHTNESS_CHANGE_RATIO",
+            "TRANSITION_SETTLE_SECONDS",
             "COLOR_TEMP_CHANGE",
             "RGB_REDMEAN_CHANGE",
             "_DOMAIN_SHORT",
@@ -183,6 +185,7 @@ def production_namespace():
             "_calibrated_white_channels",
             "_calibrated_rgb_from_kelvin",
             "_has_color_mode_changed",
+            "_brightness_change_threshold",
             "_attributes_have_changed",
             "_add_missing_attributes",
             "_convert_attributes",
@@ -212,6 +215,7 @@ def production_namespace():
             "add_manual_control_attributes",
             "set_manual_control_attributes",
             "_handle_timer",
+            "start_transition_timer",
         },
         "CircadianProManager",
     )
@@ -228,6 +232,7 @@ class ProtocolHarness:
         self.calibration_targets = []
         self.refreshed_lights = []
         self.sleeps = []
+        self.started_transitions = []
         self.context_counter = 0
         self.state = State(
             {
@@ -290,6 +295,7 @@ class ProtocolHarness:
             last_service_context={},
             last_service_acknowledgements={},
             our_last_state_on_change={},
+            start_transition_timer=lambda light: self.started_transitions.append(light),
             manual_control={},
             auto_reset_manual_control_times={},
             auto_reset_manual_control_timers={},
@@ -386,6 +392,61 @@ class ProtocolHarness:
             )
         )
         return self.manager.get_manual_control_attributes(self.light)
+
+
+class ManualBrightnessToleranceTests(unittest.TestCase):
+    """Manual dimming must remain observable even at the bottom of the range."""
+
+    def test_ten_percent_to_one_percent_is_manual(self):
+        harness = ProtocolHarness(modes=("color_temp",))
+        harness.dispatch(3500)
+        # The previous CP command had set this group to 10% (26/255).
+        harness.manager.last_service_data[harness.light]["brightness"] = 26
+        harness.state.attributes["brightness"] = 3
+        flags = harness.ns["LightControlAttributes"]
+        self.assertEqual(harness.detect_manual_change(), flags.BRIGHTNESS)
+        self.assertEqual(harness.manager.get_manual_control_attributes(harness.light), flags.BRIGHTNESS)
+
+    def test_small_device_rounding_does_not_trigger_manual(self):
+        for expected, reported in ((26, 24), (255, 251), (1, 3)):
+            with self.subTest(expected=expected, reported=reported):
+                harness = ProtocolHarness(modes=("color_temp",))
+                harness.dispatch(3500)
+                harness.manager.last_service_data[harness.light]["brightness"] = expected
+                harness.state.attributes["brightness"] = reported
+                self.assertEqual(
+                    harness.detect_manual_change(),
+                    harness.ns["LightControlAttributes"].NONE,
+                )
+
+    def test_low_brightness_zero_report_is_not_ignored(self):
+        harness = ProtocolHarness(modes=("color_temp",))
+        harness.dispatch(3500)
+        harness.manager.last_service_data[harness.light]["brightness"] = 26
+        harness.state.attributes["brightness"] = 0
+        self.assertEqual(
+            harness.detect_manual_change(),
+            harness.ns["LightControlAttributes"].BRIGHTNESS,
+        )
+
+    def test_transition_timer_includes_device_settling_margin(self):
+        harness = ProtocolHarness(modes=("color_temp",))
+        harness.dispatch(3500)
+        self.assertEqual(harness.started_transitions, [harness.light])
+
+        scheduled = []
+        manager = SimpleNamespace(
+            last_service_data={harness.light: {"transition": 5}},
+            transition_timers={},
+            _handle_timer=lambda light, timers, delay, reset: scheduled.append((light, delay)),
+        )
+        harness.ns["start_transition_timer"](manager, harness.light)
+        self.assertEqual(scheduled, [(harness.light, 7.0)])
+
+        # A zero-transition command still needs a short reporting margin.
+        manager.last_service_data[harness.light] = {"brightness": 26}
+        harness.ns["start_transition_timer"](manager, harness.light)
+        self.assertEqual(scheduled[-1], (harness.light, 2.0))
 
 
 class ColorTemperatureBoundsTests(unittest.TestCase):
