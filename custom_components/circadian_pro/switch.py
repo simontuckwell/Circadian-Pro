@@ -202,10 +202,13 @@ _LOGGER = logging.getLogger(__name__)
 
 SCAN_INTERVAL = timedelta(seconds=10)
 
-# Consider it a significant change when attribute changes more than
-BRIGHTNESS_CHANGE = 25  # ≈10% of total range
+# Small absolute tolerance at low brightness (about one percentage point),
+# with a modest relative allowance for higher-brightness device quantisation.
+BRIGHTNESS_CHANGE = 3  # HA's 0-255 brightness scale
+BRIGHTNESS_CHANGE_RATIO = 0.02  # 2% of the requested brightness
 COLOR_TEMP_CHANGE = 100  # ≈3% of total range (2000-6500)
 RGB_REDMEAN_CHANGE = 80  # ≈10% of total range
+TRANSITION_SETTLE_SECONDS = 2.0  # Allow for delayed Hue state reports
 MAX_STATE_HISTORY = 8  # Keep the first and most recent reports of one command.
 
 
@@ -1124,6 +1127,11 @@ def _has_color_mode_changed(
     return False
 
 
+def _brightness_change_threshold(requested_brightness: int | float) -> int:
+    """Allow minor device rounding without masking dim-level manual changes."""
+    return max(BRIGHTNESS_CHANGE, round(requested_brightness * BRIGHTNESS_CHANGE_RATIO))
+
+
 def _attributes_have_changed(
     light: str,
     old_attributes: dict[str, Any],
@@ -1169,16 +1177,18 @@ def _attributes_have_changed(
             new_attributes,
         )
 
-    if old_attributes.get(ATTR_BRIGHTNESS) and new_attributes.get(ATTR_BRIGHTNESS):
-        last_brightness = old_attributes[ATTR_BRIGHTNESS]
-        current_brightness = new_attributes[ATTR_BRIGHTNESS]
-        if abs(current_brightness - last_brightness) > BRIGHTNESS_CHANGE:
+    last_brightness = old_attributes.get(ATTR_BRIGHTNESS)
+    current_brightness = new_attributes.get(ATTR_BRIGHTNESS)
+    if last_brightness is not None and current_brightness is not None:
+        threshold = _brightness_change_threshold(last_brightness)
+        if abs(current_brightness - last_brightness) > threshold:
             _LOGGER.debug(
-                "Brightness of '%s' significantly changed from %s to %s with"
-                " context.id='%s'",
+                "Brightness of '%s' significantly changed from %s to %s "
+                "(tolerance %s) with context.id='%s'",
                 light,
                 last_brightness,
                 current_brightness,
+                threshold,
                 context.id,
             )
             changed_attributes |= LightControlAttributes.BRIGHTNESS
@@ -2062,6 +2072,11 @@ class CircadianProSwitch(SwitchEntity, RestoreEntity):
                     self.manager.our_last_state_on_change.pop(light, None)
                     self.manager.clear_proactively_adapting(light)
                 raise
+            else:
+                # Some lights do not emit a state_changed event for an identical
+                # command. Keep the periodic poll away from the transition even
+                # when Hue has not acknowledged it with a new HA state.
+                self.manager.start_transition_timer(light)
 
         # If an initial target already matched the device, redundant-command
         # filtering could suppress the service call entirely. Remember only
@@ -3074,7 +3089,11 @@ class CircadianProManager:
             timer.start()
 
     def start_transition_timer(self, light: str) -> None:
-        """Mark a light as manually controlled."""
+        """Delay periodic polling until Hue's commanded transition has settled.
+
+        Explicit Home Assistant service events remain eligible for immediate
+        manual takeover; this timer only gates periodic untracked-change checks.
+        """
         last_service_data = self.last_service_data.get(light)
         if last_service_data is None:
             _LOGGER.debug(
@@ -3083,28 +3102,18 @@ class CircadianProManager:
             )
             return
 
-        last_transition = last_service_data.get(ATTR_TRANSITION)
-        if not last_transition:
-            _LOGGER.debug(
-                "No transition in last adapt for light %s, not starting timer.",
-                light,
-            )
-            return
-
+        transition = max(0.0, float(last_service_data.get(ATTR_TRANSITION) or 0))
+        delay = transition + TRANSITION_SETTLE_SECONDS
         _LOGGER.debug(
-            "Start transition timer of %s seconds for light %s",
-            last_transition,
-            light,
+            "Waiting %.1f seconds for light %s to settle "
+            "(transition %.1f, reporting margin %.1f)",
+            delay, light, transition, TRANSITION_SETTLE_SECONDS,
         )
 
         async def reset() -> None:
-            # Called when the timer expires, doesn't need to do anything
-            _LOGGER.debug(
-                "Transition finished for light %s",
-                light,
-            )
+            _LOGGER.debug("Transition settled for light %s", light)
 
-        self._handle_timer(light, self.transition_timers, last_transition, reset)
+        self._handle_timer(light, self.transition_timers, delay, reset)
 
     def set_auto_reset_manual_control_times(
         self,
