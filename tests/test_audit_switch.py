@@ -399,6 +399,35 @@ class TargetResolutionTests(unittest.TestCase):
 
 
 class BatchAndLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_interval_defers_untracked_change_check_until_transition_settles(self):
+        ns = namespace()
+        load_functions(ns, "switch.py", {"_update_attrs_and_maybe_adapt_lights"}, "CircadianProSwitch")
+        light = "light.aquarium"
+        examined = []
+
+        async def examine(*_):
+            examined.append(light)
+
+        state = State({"brightness": 26})
+        timer = SimpleNamespace(is_running=lambda: True)
+        manager = SimpleNamespace(
+            transition_timers={light: timer},
+            update_manually_controlled_from_untracked_change=examine,
+        )
+        switch = SimpleNamespace(
+            _name="Aquarium", is_on=True, _only_once=False,
+            _transition=5, _detect_non_ha_changes=True,
+            _sun_light_settings=SimpleNamespace(get_settings=lambda *_: {"brightness_pct": 10}),
+            _effective_sleep_state=lambda: False,
+            _settings={}, async_write_ha_state=lambda: None,
+            lights=[light], manager=manager,
+            hass=SimpleNamespace(states=SimpleNamespace(get=lambda _: state)),
+        )
+        await ns["_update_attrs_and_maybe_adapt_lights"](
+            switch, context=SimpleNamespace(id="interval"), force=False,
+        )
+        self.assertEqual(examined, [])
+
     async def test_queued_update_after_profile_off_returns_without_commands(self):
         ns = namespace()
         load_functions(ns, "switch.py", {"_update_attrs_and_maybe_adapt_lights"}, "CircadianProSwitch")
